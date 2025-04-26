@@ -1205,19 +1205,19 @@ def toggle_device(n_clicks, current_state):
     
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
 
-# Update fan speed callback to log all parameters, not just fan speed
+# Fan speed callback consolidated - now also logs to InfluxDB
 @callback(
-    Output('fan-speed-output', 'children', allow_duplicate=True),
-    [Input('fan-speed-slider', 'value'), 
+    Output('fan-speed-output', 'children'),
+    [Input('fan-speed-slider', 'value'),
      Input('interval-component', 'n_intervals')],
-    prevent_initial_call=True  # This is required when using allow_duplicate=True
 )
-def update_fan_speed_unified(value, n_intervals):
+def update_fan_speed(value, n_intervals):
     ctx = dash.callback_context
-    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    # Determine which input triggered the callback
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     
-    # If triggered by slider change
-    if trigger_id == 'fan-speed-slider' and value is not None:
+    # If the slider changed, update fan speed
+    if triggered_id == 'fan-speed-slider' and value is not None:
         global fan_speed
         fan_speed = value
         
@@ -1231,8 +1231,8 @@ def update_fan_speed_unified(value, n_intervals):
             fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
             fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
         
-        # Log parameters to InfluxDB
+        # Log the fan speed change to InfluxDB
         log_parameters_to_influxdb()
     
-    # Return current fan speed
+    # Always return the current fan speed
     return f'Current: {fan_speed}%'
