@@ -1,0 +1,7 @@
+{
+    "device_name": "pi",
+    "refresh_rate": 2000,
+    "temperature_unit": "celsius",
+    "display_mode": "gauge",
+    "last_modified": "2025-04-26 19:29:42"
+}
