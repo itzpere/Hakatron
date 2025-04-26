@@ -393,7 +393,7 @@ layout = html.Div([
                                 ),
                             ], style={'width': '350px', 'margin': '0 auto'}),
                             html.Div(
-                                id=FAN_SPEED_OUTPUT_ID,  # Changed ID here
+                                id=FAN_SPEED_OUTPUT_ID,  # Using the new unique ID
                                 children=f'Current: {fan_speed}%', 
                                 style={
                                     'marginTop': '15px',
@@ -1210,18 +1210,20 @@ def toggle_device(n_clicks, current_state):
 
 # Fan speed callback consolidated - now also logs to InfluxDB
 @callback(
-    Output(FAN_SPEED_OUTPUT_ID, 'children'),  # Using the new unique ID
+    Output(FAN_SPEED_OUTPUT_ID, 'children'),
     [Input('fan-speed-slider', 'value')],
     prevent_initial_call=False
 )
 def update_fan_speed_display(value):
     """Update fan speed display when slider changes"""
+    # Declare global variable at the beginning of the function, before any usage
+    global fan_speed
+    
     # If value is None (initial load), use the global fan_speed
     if value is None:
         return f'Current: {fan_speed}%'
     
     # Update global fan speed and history
-    global fan_speed
     fan_speed = value
     
     # Update fan history
