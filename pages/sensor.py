@@ -213,6 +213,9 @@ else:
     USE_RANDOM_DATA = True
     print("Using random data for temperature values")
 
+# Define a unique ID for the fan speed output to avoid conflicts
+FAN_SPEED_OUTPUT_ID = 'fan-speed-output-v1'
+
 # Define the layout for just this page (without the navbar which is in app.py)
 layout = html.Div([
     # Store component to track device state (on/off)
@@ -390,7 +393,7 @@ layout = html.Div([
                                 ),
                             ], style={'width': '350px', 'margin': '0 auto'}),
                             html.Div(
-                                id='fan-speed-output', 
+                                id=FAN_SPEED_OUTPUT_ID,  # Changed ID here
                                 children=f'Current: {fan_speed}%', 
                                 style={
                                     'marginTop': '15px',
@@ -1207,32 +1210,31 @@ def toggle_device(n_clicks, current_state):
 
 # Fan speed callback consolidated - now also logs to InfluxDB
 @callback(
-    Output('fan-speed-output', 'children'),
-    [Input('fan-speed-slider', 'value'),
-     Input('interval-component', 'n_intervals')],
+    Output(FAN_SPEED_OUTPUT_ID, 'children'),  # Using the new unique ID
+    [Input('fan-speed-slider', 'value')],
+    prevent_initial_call=False
 )
-def update_fan_speed(value, n_intervals):
-    ctx = dash.callback_context
-    # Determine which input triggered the callback
-    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+def update_fan_speed_display(value):
+    """Update fan speed display when slider changes"""
+    # If value is None (initial load), use the global fan_speed
+    if value is None:
+        return f'Current: {fan_speed}%'
     
-    # If the slider changed, update fan speed
-    if triggered_id == 'fan-speed-slider' and value is not None:
-        global fan_speed
-        fan_speed = value
-        
-        # Update fan history
-        current_time = datetime.now().strftime('%H:%M:%S')
-        fan_history['time'].append(current_time)
-        fan_history['speed'].append(value)
-        
-        # Keep only recent history
-        if len(fan_history['time']) > MAX_DATA_POINTS:
-            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
-            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
-        
-        # Log the fan speed change to InfluxDB
-        log_parameters_to_influxdb()
+    # Update global fan speed and history
+    global fan_speed
+    fan_speed = value
     
-    # Always return the current fan speed
-    return f'Current: {fan_speed}%'
+    # Update fan history
+    current_time = datetime.now().strftime('%H:%M:%S')
+    fan_history['time'].append(current_time)
+    fan_history['speed'].append(value)
+    
+    # Keep only recent history
+    if len(fan_history['time']) > MAX_DATA_POINTS:
+        fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+        fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+    
+    # Log the fan speed change to InfluxDB
+    log_parameters_to_influxdb()
+    
+    return f'Current: {value}%'
