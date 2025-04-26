@@ -1208,26 +1208,24 @@ def toggle_device(n_clicks, current_state):
 
 # Update fan speed callback to log all parameters, not just fan speed
 @callback(
-    Output('fan-speed-output', 'children'),
+    Output('fan-speed-output', 'children', allow_duplicate=True),
     Input('fan-speed-slider', 'value')
 )
 def update_fan_speed(value):
-    global fan_speed, fan_history, ACTIVE_MODE
+    global fan_speed
+    fan_speed = value  # Update global fan speed value
     
-    # Update the global fan speed value
-    fan_speed = value
-    
-    # Record fan speed history
+    # Update fan history
     current_time = datetime.now().strftime('%H:%M:%S')
     fan_history['time'].append(current_time)
-    fan_history['speed'].append(fan_speed)
+    fan_history['speed'].append(value)
     
     # Keep only recent history
     if len(fan_history['time']) > MAX_DATA_POINTS:
         fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
         fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
     
-    # Log all parameters to InfluxDB (replacing the specific fan logging code)
+    # Log the fan speed change to InfluxDB
     log_parameters_to_influxdb()
     
-    return f'Current: {fan_speed}%'
+    return f'Current: {value}%'
