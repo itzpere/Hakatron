@@ -17,7 +17,7 @@ class TermColors:
     UNDERLINE = '\033[4m'
 
 # InfluxDB connection parameters - update as needed
-INFLUXDB_URL = "10.147.18.192"  # Try with localhost instead of IP
+INFLUXDB_URL = "localhost"  # Try with localhost instead of IP
 INFLUXDB_PORT = 8086
 INFLUXDB_USER = "admin"
 INFLUXDB_PASSWORD = "mia"

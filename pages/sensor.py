@@ -49,7 +49,7 @@ SENSOR_ON_COLOR = '#4CAF50'  # Green
 SENSOR_OFF_COLOR = 'gray'
 
 # InfluxDB connection parameters
-INFLUXDB_URL = "10.147.18.192"
+INFLUXDB_URL = "localhost"
 INFLUXDB_PORT = 8086
 INFLUXDB_USER = "admin"
 INFLUXDB_PASSWORD = "mia"
@@ -480,6 +480,61 @@ layout = html.Div([
     ], style={'margin': '20px', 'padding': '15px', 'backgroundColor': '#f9f9f9', 'borderRadius': '10px'})
 ])
 
+# New function to log all parameters to InfluxDB
+def log_parameters_to_influxdb():
+    """Log all current parameters to InfluxDB"""
+    if client and not USE_RANDOM_DATA:
+        try:
+            current_time = datetime.now()
+            
+            # Prepare all parameters to log
+            points = [
+                {
+                    'measurement': 'temperature',
+                    'time': current_time,
+                    'fields': {
+                        'value': temp_data['temperature'][-1] if temp_data['temperature'] else None,
+                        'target': float(target_temperature)
+                    }
+                },
+                {
+                    'measurement': 'heater',
+                    'time': current_time,
+                    'fields': {
+                        'state': int(heater_state)
+                    }
+                },
+                {
+                    'measurement': 'fan',
+                    'time': current_time,
+                    'fields': {
+                        'speed': int(fan_speed)
+                    }
+                },
+                {
+                    'measurement': 'sensors',
+                    'time': current_time,
+                    'fields': {
+                        'movement': int(movement_detected),
+                        'window': int(window_open)
+                    }
+                },
+                {
+                    'measurement': 'device',
+                    'time': current_time,
+                    'fields': {
+                        'on': int(DEVICE_ON),
+                        'mode': ACTIVE_MODE
+                    }
+                }
+            ]
+            
+            # Write all points to InfluxDB
+            client.write_points(points)
+            print(f"Successfully logged all parameters to InfluxDB at {current_time}")
+        except Exception as e:
+            print(f"Error logging parameters to InfluxDB: {e}")
+
 # Mode buttons callback - updated to also handle control states
 @callback(
     [Output('active-mode', 'children'),
@@ -578,6 +633,9 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks):
             'cursor': 'not-allowed'
         })
     
+    # Log the mode change to InfluxDB
+    log_parameters_to_influxdb()
+    
     return (ACTIVE_MODE, 
             target_temperature, 
             f"{target_temperature} °C", 
@@ -586,7 +644,7 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks):
             fan_control_disabled,
             input_style,
             button_style,
-            control_panel_style)  # Return the control panel style
+            control_panel_style)
 
 # Target temperature setting callback - update to work with modes
 @callback(
@@ -600,6 +658,10 @@ def update_target_temperature(n_clicks, value):
     if n_clicks is not None and value is not None:
         target_temperature = float(value)
         ACTIVE_MODE = "Ručni"  # Setting manual temperature always switches to Ručni mode
+        
+        # Log the target temperature change
+        log_parameters_to_influxdb()
+        
     return [f"{target_temperature} °C"]
 
 # Current temperature callback - MODIFIED to remove current-temp output
@@ -659,7 +721,9 @@ def update_current_temp(n):
         }
         window_text = "Open" if is_window_open else "Closed"
         
-        # Remove temperature from return values
+        # Log all parameters to InfluxDB
+        log_parameters_to_influxdb()
+        
         return heater_style, heater_text, movement_style, movement_text, window_style, window_text
     
     # Default values if no temperature data
@@ -1137,10 +1201,12 @@ def toggle_device(n_clicks, current_state):
     # Hide controls when device is off
     content_style = {'display': 'block'} if new_state else {'display': 'none'}
     
+    # Log the device state change
+    log_parameters_to_influxdb()
+    
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
 
-# Replace the update_fan_speed callback
-
+# Update fan speed callback to log all parameters, not just fan speed
 @callback(
     Output('fan-speed-output', 'children'),
     Input('fan-speed-slider', 'value')
@@ -1161,19 +1227,7 @@ def update_fan_speed(value):
         fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
         fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
     
-    # If we're in Ručni mode and connected to InfluxDB, send the update
-    if ACTIVE_MODE == "Ručni" and client and not USE_RANDOM_DATA:
-        try:
-            # Write the fan speed setting to InfluxDB configuration
-            point = {
-                'measurement': 'config',
-                'fields': {
-                    'manual_speed': 1 if value <= 30 else 2 if value <= 70 else 3,
-                    'fan_percentage': float(value)
-                }
-            }
-            client.write_points([point])
-        except Exception as e:
-            print(f"Error updating fan speed in InfluxDB: {e}")
+    # Log all parameters to InfluxDB (replacing the specific fan logging code)
+    log_parameters_to_influxdb()
     
     return f'Current: {fan_speed}%'
