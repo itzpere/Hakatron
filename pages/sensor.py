@@ -1207,10 +1207,10 @@ def toggle_device(n_clicks, current_state):
 
 # Update fan speed callback to log all parameters, not just fan speed
 @callback(
-    Output('fan-speed-output', 'children'),
+    Output('fan-speed-output', 'children', allow_duplicate=True),
     [Input('fan-speed-slider', 'value'), 
      Input('interval-component', 'n_intervals')],
-    prevent_initial_call=False
+    prevent_initial_call=True  # This is required when using allow_duplicate=True
 )
 def update_fan_speed_unified(value, n_intervals):
     ctx = dash.callback_context
