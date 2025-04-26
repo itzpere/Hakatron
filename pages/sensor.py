@@ -1209,7 +1209,8 @@ def toggle_device(n_clicks, current_state):
 # Update fan speed callback to log all parameters, not just fan speed
 @callback(
     Output('fan-speed-output', 'children', allow_duplicate=True),
-    Input('fan-speed-slider', 'value')
+    Input('fan-speed-slider', 'value'),
+    prevent_initial_call=True
 )
 def update_fan_speed(value):
     global fan_speed
