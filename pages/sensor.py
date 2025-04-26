@@ -793,7 +793,6 @@ def update_temp_gauge(n):
     return fig
 
 # Fan gauge callback
-# 2. Update the callback definition
 @callback(
     Output('fan-gauge', 'figure'),
     Input('interval-component', 'n_intervals')
@@ -1208,25 +1207,32 @@ def toggle_device(n_clicks, current_state):
 
 # Update fan speed callback to log all parameters, not just fan speed
 @callback(
-    Output('fan-speed-output', 'children', allow_duplicate=True),
-    Input('fan-speed-slider', 'value'),
-    prevent_initial_call=True
+    Output('fan-speed-output', 'children'),
+    [Input('fan-speed-slider', 'value'), 
+     Input('interval-component', 'n_intervals')],
+    prevent_initial_call=False
 )
-def update_fan_speed(value):
-    global fan_speed
-    fan_speed = value  # Update global fan speed value
+def update_fan_speed_unified(value, n_intervals):
+    ctx = dash.callback_context
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     
-    # Update fan history
-    current_time = datetime.now().strftime('%H:%M:%S')
-    fan_history['time'].append(current_time)
-    fan_history['speed'].append(value)
+    # If triggered by slider change
+    if trigger_id == 'fan-speed-slider' and value is not None:
+        global fan_speed
+        fan_speed = value
+        
+        # Update fan history
+        current_time = datetime.now().strftime('%H:%M:%S')
+        fan_history['time'].append(current_time)
+        fan_history['speed'].append(value)
+        
+        # Keep only recent history
+        if len(fan_history['time']) > MAX_DATA_POINTS:
+            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
+        # Log parameters to InfluxDB
+        log_parameters_to_influxdb()
     
-    # Keep only recent history
-    if len(fan_history['time']) > MAX_DATA_POINTS:
-        fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
-        fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
-    
-    # Log the fan speed change to InfluxDB
-    log_parameters_to_influxdb()
-    
-    return f'Current: {value}%'
+    # Return current fan speed
+    return f'Current: {fan_speed}%'
