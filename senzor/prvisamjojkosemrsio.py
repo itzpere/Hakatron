@@ -118,13 +118,13 @@ def main():
             if sensor_changed:
                 print(f"Sensor change detected: window={sw.window_open}, presence={sw.auto_mode}")
                 log_sensor_data(cli, temp, sw)
-            
+            else:
+                # Only log at regular intervals if we haven't already logged due to change
+                log_sensor_data(cli, temp, sw)
+
             # Store current states for next comparison
             prev_window_state = sw.window_open
             prev_auto_mode = sw.auto_mode
-            
-            # Regular logging at each interval
-            log_sensor_data(cli, temp, sw)
 
             print(f"{time.strftime('%H:%M:%S')}  "
                   f"T={temp:5.2f}°C  "
