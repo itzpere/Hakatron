@@ -147,13 +147,16 @@ def fetch_target(cli, current: float) -> float:
     return current
 
 
-def log_point(cli, temp, cmd, sw):
-    cli.write_points([{ 'measurement': INFLUX['measurement'], 'fields': {
+def log_point(cli, temp, cmd, sw, target, mode):
+    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': {
         'sensors_temp': temp,
         'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
         'auto_mode': int(sw.auto_mode),
-        'window_open': int(sw.window_open), }}])
+        'window_open': int(sw.window_open),
+        'target_temp': target,
+        'mode': mode,
+    }}])
 
 # ───────── main petlja ──────────────────────────────────────────────
 
@@ -172,7 +175,7 @@ def main():
             sw  = read_switches()
             cmd = compute_command(temp, target, sw)
             update_led_bar(cmd.fan_speed, pwms)
-            log_point(cli, temp, cmd, sw)
+            log_point(cli, temp, cmd, sw, target, mode)
             mode = 'WIN' if sw.window_open else 'AUTO' if sw.auto_mode else 'LOW'
             print(f"{time.strftime('%H:%M:%S')}  T={temp:5.2f}°C  Set={target:.2f}°C  {mode:<4}  FAN={cmd.fan_speed}  AC={cmd.ac_intensity:5.1f}%")
             time.sleep(LOG_INTERVAL)

@@ -140,14 +140,15 @@ def fetch_pid_params(cli, p: PIDParams) -> PIDParams:
                      _latest('ki', p.ki),
                      _latest('kd', p.kd))
 
-def log_point(cli, temp, cmd, sw, pid_out):
+def log_point(cli, temp, cmd, sw, target, mode):
     cli.write_points([{'measurement': INFLUX['measurement'], 'fields': {
         'sensors_temp': temp,
-        'fan_speed'   : cmd.fan_speed,
+        'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
-        'pid_output'  : pid_out,
-        'auto_mode'   : int(sw.auto_mode),
-        'window_open' : int(sw.window_open),
+        'auto_mode': int(sw.auto_mode),
+        'window_open': int(sw.window_open),
+        'target_temp': target,
+        'mode': mode,
     }}])
 
 # ───────── главна петља ─────────────────────────────────────────────
@@ -198,10 +199,10 @@ def main():
             else:                           # AUTO
                 show_auto_mode(pwms, cmd.fan_speed)
 
-            log_point(cli, temp, cmd, sw, pid_out)
-
             mode = ('WINDOW' if sw.window_open else
                     'AUTO'   if sw.auto_mode  else 'LOW')
+            log_point(cli, temp, cmd, sw, target, mode)
+
             print(f"{time.strftime('%H:%M:%S')}  "
                   f"T={temp:5.2f}°C  Set={target:.2f}°C  "
                   f"{mode:<6}  FAN={cmd.fan_speed}  "

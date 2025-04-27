@@ -155,14 +155,15 @@ def fetch_config(cli, target: float, manual: int, pid_p: PIDParams) -> tuple[flo
         pass
     return target, manual, pid_p
 
-def log_point(cli, temp, cmd, sw, pid_out):
+def log_point(cli, temp, cmd, sw, target, mode):
     cli.write_points([{'measurement': INFLUX['measurement'], 'fields': {
         'sensors_temp': temp,
         'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
         'auto_mode': int(sw.auto_mode),
         'window_open': int(sw.window_open),
-        'pid_output': pid_out,
+        'target_temp': target,
+        'mode': mode,
     }}])
 
 # ───────── main loop ───────────────────────────────────────────────
@@ -205,7 +206,7 @@ def main():
             cmd = compute_command(temp, target, sw, manual, pid_out)
 
             update_leds(cmd.fan_speed, pwms)
-            log_point(cli, temp, cmd, sw, pid_out)
+            log_point(cli, temp, cmd, sw, target, mode)
 
             mode = ('WINDOW' if sw.window_open else
                     'AUTO' if sw.auto_mode else 'LOW')
