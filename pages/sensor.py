@@ -426,34 +426,7 @@ layout = html.Div([
             }
         )
     ], style={'margin': '20px', 'marginBottom': '0px'}),
-    
-    # ON/OFF button at the top
-    html.Div([
-        html.Button(
-            "TURN OFF", 
-            id="device-power-button", 
-            style={
-                'float': 'right',
-                'marginTop': '10px',
-                'padding': '10px 20px',
-                'backgroundColor': '#4CAF50', # Green when ON
-                'color': 'white',
-                'border': 'none',
-                'borderRadius': '4px',
-                'cursor': 'pointer',
-                'fontSize': '16px',
-                'fontWeight': 'bold'
-            }
-        ),
-        html.Div([
-            html.H1("Temperature Monitor", style={'display': 'inline-block'}),
-            html.Div(id="device-status-indicator", 
-                     style={'height': '20px', 'width': '20px', 'borderRadius': '50%', 
-                            'backgroundColor': '#4CAF50', 'display': 'inline-block', 
-                            'marginLeft': '15px', 'verticalAlign': 'middle'})
-        ], style={'display': 'flex', 'alignItems': 'center'})
-    ], style={'margin': '20px', 'marginBottom': '0px', 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'}),
-    
+
     # Container for all UI elements that can be hidden
     html.Div([
         # Temperature Info Panel

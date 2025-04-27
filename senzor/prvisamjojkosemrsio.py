@@ -144,7 +144,11 @@ def update_leds_for_fan_speed(speed: int):
     GPIO.output([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.LOW)
     
     # Set appropriate LED based on speed
-    if speed <= 33:
+    if speed <= 0:
+        # No speed: all LEDs off
+        GPIO.output([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.LOW)
+        print(f"Fan Speed: {speed}% - Off (All LEDs OFF)")
+    elif speed <= 33:
         # Low speed: only first LED on
         GPIO.output(LED_PIN_1, GPIO.HIGH)
         print(f"Fan Speed: {speed}% - Low (LED 1 ON)")
