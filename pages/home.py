@@ -3,6 +3,161 @@ from dash import html, dcc, callback, Input, Output, State
 import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
 import random
+from influxdb import InfluxDBClient
+from datetime import datetime
+
+# InfluxDB connection parameters
+INFLUXDB_URL = "10.147.18.192"
+INFLUXDB_PORT = 8086
+INFLUXDB_USER = "admin"
+INFLUXDB_PASSWORD = "mia"
+INFLUXDB_DATABASE = "mydb"
+
+# Initialize InfluxDB client
+try:
+    client = InfluxDBClient(
+        host=INFLUXDB_URL,
+        port=INFLUXDB_PORT,
+        username=INFLUXDB_USER,
+        password=INFLUXDB_PASSWORD,
+        database=INFLUXDB_DATABASE
+    )
+    print("Successfully connected to InfluxDB")
+except Exception as e:
+    print(f"Failed to connect to InfluxDB: {e}")
+    client = None
+
+# Function to check if data is recent (within last 10 minutes)
+def is_data_recent(timestamp_str):
+    if not timestamp_str:
+        return False
+    try:
+        # Parse InfluxDB timestamp format
+        timestamp = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+        now = datetime.now()
+        # Check if timestamp is within last 10 minutes
+        return (now - timestamp).total_seconds() < 600
+    except Exception as e:
+        print(f"Error parsing timestamp: {e}")
+        return False
+
+# Function to fetch latest sensor data from InfluxDB
+def fetch_latest_sensor_data():
+    if client is None:
+        print("No database connection, using random data")
+        return None, None
+    
+    try:
+        # Get the latest temperature
+        temp_result = client.query('SELECT LAST(sensors_temp) FROM pi')
+        temp_value = None
+        if temp_result:
+            points = list(temp_result.get_points())
+            if points and is_data_recent(points[0]['time']):
+                temp_value = points[0]['last']
+        
+        # Get the latest fan speed
+        fan_result = client.query('SELECT LAST(speed) FROM fan_speed')
+        fan_value = None
+        if fan_result:
+            points = list(fan_result.get_points())
+            if points and is_data_recent(points[0]['time']):
+                fan_value = points[0]['last']
+        
+        return temp_value, fan_value
+    
+    except Exception as e:
+        print(f"Error fetching sensor data: {e}")
+        return None, None
+
+# Function to fetch devices with live data from database
+def fetch_devices():
+    # Start with the hardcoded devices as a base
+    current_devices = devices.copy()
+    
+    # If no database connection, return the hardcoded values
+    if client is None:
+        print("No database connection, using hardcoded device data")
+        return current_devices
+    
+    try:
+        # Get the latest temperature data
+        temp_query = client.query("SELECT LAST(sensors_temp) FROM pi")
+        temp_points = list(temp_query.get_points())
+        
+        # Debug the temperature data
+        print(f"Temperature data from database: {temp_points}")
+        
+        # Process temperature data without checking if recent
+        if temp_points and len(temp_points) > 0:
+            try:
+                temp_value = round(float(temp_points[0]['last']), 1)
+                print(f"Retrieved temperature: {temp_value}°C")
+                
+                # Apply to the pi device
+                for device in current_devices:
+                    if device["id"] == "pi":
+                        print(f"Setting temperature for pi device: {temp_value}°C")
+                        device["temperature"] = temp_value
+            except (KeyError, ValueError) as e:
+                print(f"Error processing temperature: {e}")
+        
+        # Get the latest fan speed
+        fan_query = client.query("SELECT LAST(speed) FROM fan_speed")
+        fan_points = list(fan_query.get_points())
+        if fan_points:
+            try:
+                fan_speed = int(fan_points[0]['last'])
+                # Apply to the pi device
+                for device in current_devices:
+                    if device["id"] == "pi":
+                        device["fan_speed"] = fan_speed
+            except (KeyError, ValueError) as e:
+                print(f"Error processing fan speed: {e}")
+        
+        # Get power state for the pi device
+        power_query = client.query("SELECT LAST(power) FROM device_info")
+        power_points = list(power_query.get_points())
+        if power_points:
+            try:
+                power_value = bool(power_points[0]['last'])
+                # Apply to the pi device
+                for device in current_devices:
+                    if device["id"] == "pi":
+                        device["power"] = power_value
+                        # Update status based on power
+                        device["status"] = "online" if power_value else "offline"
+            except (KeyError, ValueError) as e:
+                print(f"Error processing power state: {e}")
+        
+        # Get mode setting
+        mode_query = client.query("SELECT LAST(mode) FROM device_settings")
+        mode_points = list(mode_query.get_points())
+        if mode_points:
+            try:
+                mode_value = mode_points[0]['last']
+                # Apply to the pi device
+                for device in current_devices:
+                    if device["id"] == "pi":
+                        device["mode"] = mode_value
+            except (KeyError, ValueError) as e:
+                print(f"Error processing mode: {e}")
+        
+        # Check if the pi device has temperature and fan_speed
+        for device in current_devices:
+            if device["id"] == "pi":
+                if "temperature" not in device:
+                    device["temperature"] = 25.0  # Default value
+                if "fan_speed" not in device:
+                    device["fan_speed"] = 0  # Default value
+                
+        return current_devices
+        
+    except Exception as e:
+        print(f"Error fetching devices from database: {e}")
+        import traceback
+        traceback.print_exc()
+        return current_devices  # Use hardcoded devices as fallback
 
 # Alert data at the top for easier database integration
 alerts = [
@@ -34,7 +189,7 @@ devices = [
         "status": "online", 
         "temperature": 42.3, 
         "fan_speed": 65,
-        "mode": "Normal", 
+        "mode": "Automatic", 
         "location": "Home Office",
         "power": True  # Device is powered on
     },
@@ -45,7 +200,7 @@ devices = [
         "status": "online", 
         "temperature": 38.5, 
         "fan_speed": 45,
-        "mode": "Power Saving", 
+        "mode": "Automatic", 
         "location": "Lab",
         "power": True  # Device is powered on
     }
@@ -236,26 +391,18 @@ layout = html.Div([
      Input("home-interval", "n_intervals")]
 )
 def update_device_cards(type_filter, status_filter, sort_option, n_intervals):
-    # Update values to simulate changing data
-    for device in devices:
-        if device["type"] == "computer" and device["power"]:  # Only update if powered on
-            device["temperature"] = round(device["temperature"] + random.uniform(-0.5, 0.5), 1)
-            device["fan_speed"] = max(0, min(100, device["fan_speed"] + random.randint(-3, 3)))
-            
-            # Occasionally change mode
-            if random.random() < 0.1:
-                device["mode"] = random.choice(["Normal", "Performance", "Power Saving", "Silent"])
-                
-        # Update status based on power
-        device["status"] = "online" if device["power"] else "offline"
-        
+    # Get devices from database
+    current_devices = fetch_devices()
+    
+    # Update values for devices that don't have live data
+    for device in current_devices:
         # If device is off, gradually decrease temperature
         if not device["power"] and device["temperature"] > 25:
             device["temperature"] = round(max(25, device["temperature"] - 0.3), 1)
             device["fan_speed"] = 0
     
     # Filter by type
-    filtered_devices = devices
+    filtered_devices = current_devices
     if type_filter != "all":
         filtered_devices = [d for d in filtered_devices if d["type"] == type_filter]
     
@@ -279,18 +426,19 @@ def update_device_cards(type_filter, status_filter, sort_option, n_intervals):
     
     # Occasionally generate a new alert
     if random.random() < 0.05:  # 5% chance each update
-        device = random.choice(filtered_devices)
-        if device["power"] and device["temperature"] > 45:  # Only generate alerts for powered on devices
-            new_alert = {
-                "id": f"alert_{len(alerts) + 1:03d}",
-                "device_id": device["id"],
-                "type": "warning",
-                "message": f"High temperature detected on {device['name']}",
-                "timestamp": "Now",
-                "acknowledged": False
-            }
-            if not any(a["device_id"] == device["id"] and a["type"] == "warning" and not a["acknowledged"] for a in alerts):
-                alerts.append(new_alert)
+        if filtered_devices:  # Make sure there are devices
+            device = random.choice(filtered_devices)
+            if device["power"] and device["temperature"] > 45:  # Only generate alerts for powered on devices
+                new_alert = {
+                    "id": f"alert_{len(alerts) + 1:03d}",
+                    "device_id": device["id"],
+                    "type": "warning",
+                    "message": f"High temperature detected on {device['name']}",
+                    "timestamp": "Now",
+                    "acknowledged": False
+                }
+                if not any(a["device_id"] == device["id"] and a["type"] == "warning" and not a["acknowledged"] for a in alerts):
+                    alerts.append(new_alert)
     
     return dbc.Row(device_columns, justify="center", className="g-4")
 
@@ -304,11 +452,24 @@ def toggle_device_power(value, id):
     # Find the device with matching ID
     device_id = id["index"]
     
-    # Update device power state
-    for device in devices:
-        if device["id"] == device_id:
-            device["power"] = value
-            break
+    try:
+        # Update power state in database
+        if client:
+            # Write the new power state to the database
+            json_body = [
+                {
+                    "measurement": "device_info",
+                    "tags": {
+                        "device_id": device_id
+                    },
+                    "fields": {
+                        "power": value
+                    }
+                }
+            ]
+            client.write_points(json_body)
+    except Exception as e:
+        print(f"Error updating device power in database: {e}")
     
-    # Return the current value (as received) to maintain the switch state
+    # Return the current value to maintain the switch state
     return value
