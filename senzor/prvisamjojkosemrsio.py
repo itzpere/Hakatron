@@ -1,31 +1,17 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi Climate Controller – AUTO / LOW / MANUAL
-====================================================
+Unified Raspberry Pi Climate Controller
+=======================================
 
-Režimi
+This script combines the functionalities of AUTO, LOW, MANUAL, and PID modes.
+Users can select the desired mode at runtime.
+
+Modes:
 ------
-* **AUTO**  (switch 1 = zatvoren, switch 2 = zatvoren)
-  * Brzina 1 ⇢ 25 % AC‑a  (|ΔT| ≤ 2 °C)
-  * Brzina 2 ⇢ 60 % AC‑a  (2 < |ΔT| ≤ 5 °C)
-  * Brzina 3 ⇢ 100 % AC‑a  (|ΔT| > 5 °C)
-* **LOW**   (switch 1 = otvoren, switch 2 = zatvoren) → Brzina 1 @ 10 % AC‑a
-* **OFF / WINDOW** (switch 2 = otvoren)                → Brzina 0, LED‑ovi ugašeni
-* **MANUAL** (iz SCADA‑e: field `manual_speed` = 1|2|3)
-  → Ignoriše temperaturu i prekidače; koristi zadatu brzinu i fiksni %.
-
-SCADA podešavanja (Influx CLI primer)
--------------------------------------
-```bash
-# Ciljna T = 22 °C
-influx -database mydb -execute "INSERT config target_temp=22"
-
-# MANUAL režim, brzina 2
-influx -database mydb -execute "INSERT config manual_speed=2"
-
-# Vraćanje u AUTO (manual off)
-influx -database mydb -execute "INSERT config manual_speed=0"
-```
+* **AUTO**: Automatically adjusts fan speed based on temperature difference.
+* **LOW**: Fixed low-speed operation.
+* **MANUAL**: User-defined fan speed.
+* **PID**: PID-controlled fan-coil drive.
 
 """
 from __future__ import annotations
@@ -34,17 +20,19 @@ from dataclasses import dataclass
 import RPi.GPIO as GPIO
 from influxdb import InfluxDBClient
 
-# ───────── pinout & konstante ─────────────────────────────────────────
+# ───────── pinout & constants ───────────────────────────────────────
 PIN_SW1, PIN_SW2 = 23, 24
 PIN_LED1, PIN_LED2, PIN_LED3 = 17, 27, 22
-PWM_FREQ = 1000  # Hz
+PWM_FREQ = 1000  # Hz
 
-DEFAULT_TARGET      = 22.0   # °C
-DEFAULT_MANUAL_SPEED = 0     # 0 = off / AUTO
-LOG_INTERVAL        = 5.0    # s
+DEFAULT_TARGET = 22.0  # °C
+LOG_INTERVAL = 5.0  # s
+PID_RESET_INTERVAL = 10.0  # s
+
+DEFAULT_PID = {'kp': 8.0, 'ki': 0.20, 'kd': 1.0}
 
 SPEED_TO_AC = {1: 25.0, 2: 60.0, 3: 100.0}
-LOW_AC      = 10.0
+LOW_AC = 10.0
 
 INFLUX = {
     'host': 'localhost', 'port': 8086,
@@ -52,7 +40,7 @@ INFLUX = {
     'database': 'mydb',  'measurement': 'environment',
 }
 
-# ───────── DS18B20 helperi ────────────────────────────────────────────
+# ───────── DS18B20 helpers ──────────────────────────────────────────
 
 def setup_sensor() -> str:
     os.system('modprobe w1-gpio')
@@ -62,7 +50,6 @@ def setup_sensor() -> str:
         raise RuntimeError('DS18B20 not found')
     return dev[0] + '/w1_slave'
 
-
 def read_temp(file: str) -> float | None:
     with open(file) as f:
         lines = f.readlines()
@@ -70,7 +57,7 @@ def read_temp(file: str) -> float | None:
         return None
     return float(lines[1].split('t=')[1]) / 1000.0
 
-# ───────── GPIO / PWM setup ──────────────────────────────────────────
+# ───────── GPIO / PWM setup ─────────────────────────────────────────
 
 def setup_gpio():
     GPIO.setmode(GPIO.BCM)
@@ -81,47 +68,53 @@ def setup_gpio():
     p3 = GPIO.PWM(PIN_LED3, PWM_FREQ); p3.start(0)
     return p1, p2, p3
 
-# ───────── data strukture ────────────────────────────────────────────
+# ───────── data structures ──────────────────────────────────────────
 @dataclass
 class SwitchState:
-    auto_mode: bool      # True = normal, False = LOW
+    auto_mode: bool      # True = AUTO, False = LOW
     window_open: bool
 
 @dataclass
 class ClimateCommand:
-    fan_speed: int       # 0–3
-    ac_intensity: float  # % 0‑100
+    fan_speed: int       # 0–3
+    ac_intensity: float  # % 0‑100
 
-# ───────── logika ────────────────────────────────────────────────────
+@dataclass
+class PIDParams:
+    kp: float; ki: float; kd: float
+
+# ───────── logic / PID ─────────────────────────────────────────────
 
 def read_switches() -> SwitchState:
-    return SwitchState(GPIO.input(PIN_SW1)==GPIO.LOW,   # LOW = pulled to GND → switch closed
-                       GPIO.input(PIN_SW2)==GPIO.LOW)
+    return SwitchState(GPIO.input(PIN_SW1) == GPIO.LOW,
+                       GPIO.input(PIN_SW2) == GPIO.LOW)
 
+def pid_step(error: float, dt: float, p: PIDParams,
+             integral: float, prev_error: float) -> tuple[float, float, float]:
+    integral += error * dt
+    deriv = (error - prev_error) / dt if dt > 0 else 0.0
+    out = p.kp * error + p.ki * integral + p.kd * deriv
+    return max(0.0, min(100.0, out)), integral, error
 
-def compute_command(temp: float, tgt: float, sw: SwitchState, manual_speed: int) -> ClimateCommand:
-    # MANUAL – najviši prioritet
+def compute_command(temp: float, tgt: float, sw: SwitchState, manual_speed: int, pid_out: float) -> ClimateCommand:
     if manual_speed in (1, 2, 3):
         return ClimateCommand(manual_speed, SPEED_TO_AC[manual_speed])
-
-    # WINDOW / OFF
     if sw.window_open:
         return ClimateCommand(0, 0.0)
-
-    # LOW režim
-    if not sw.auto_mode:   # switch1 open → LOW
+    if not sw.auto_mode:
         return ClimateCommand(1, LOW_AC)
-
-    # AUTO
     delta = abs(temp - tgt)
+    if pid_out is not None:
+        speed = 1 if pid_out < 40 else 2 if pid_out < 70 else 3
+        return ClimateCommand(speed, pid_out)
     if delta <= 2:
-        speed = 1
+        return ClimateCommand(1, SPEED_TO_AC[1])
     elif delta <= 5:
-        speed = 2
+        return ClimateCommand(2, SPEED_TO_AC[2])
     else:
-        speed = 3
-    return ClimateCommand(speed, SPEED_TO_AC[speed])
+        return ClimateCommand(3, SPEED_TO_AC[3])
 
+# ───────── LED helpers ─────────────────────────────────────────────
 
 def update_leds(speed: int, pwms):
     p1, p2, p3 = pwms
@@ -132,84 +125,103 @@ def update_leds(speed: int, pwms):
         p2.ChangeDutyCycle(100)
     elif speed == 3:
         p3.ChangeDutyCycle(100)
-    # speed 0 → sve ugašeno
 
-# ───────── Influx helpers ────────────────────────────────────────────
+# ───────── Influx helpers ──────────────────────────────────────────
 
 def influx_client():
-    return InfluxDBClient(host=INFLUX['host'], port=INFLUX['port'],
-                          username=INFLUX['username'], password=INFLUX['password'],
-                          database=INFLUX['database'])
+    return InfluxDBClient(**{k: INFLUX[k]
+                             for k in ('host', 'port', 'username', 'password', 'database')})
 
-
-def fetch_config(cli, target: float, manual: int):
-    # target_temp
+def fetch_config(cli, target: float, manual: int, pid_p: PIDParams) -> tuple[float, int, PIDParams]:
     try:
         res = cli.query('SELECT LAST(target_temp) FROM config')
         if res:
-            val = list(res.get_points())[0]['last']
-            if val is not None:
-                target = float(val)
+            target = float(list(res.get_points())[0]['last'])
     except Exception:
         pass
-    # manual_speed
     try:
         res = cli.query('SELECT LAST(manual_speed) FROM config')
         if res:
-            val = list(res.get_points())[0]['last']
-            if val is not None:
-                manual = int(val)
+            manual = int(list(res.get_points())[0]['last'])
     except Exception:
         pass
-    return target, manual
+    try:
+        pid_p = PIDParams(
+            kp=float(list(cli.query('SELECT LAST(kp) FROM config').get_points())[0]['last']),
+            ki=float(list(cli.query('SELECT LAST(ki) FROM config').get_points())[0]['last']),
+            kd=float(list(cli.query('SELECT LAST(kd) FROM config').get_points())[0]['last'])
+        )
+    except Exception:
+        pass
+    return target, manual, pid_p
 
-
-def log_point(cli, temp, cmd, sw, manual_speed):
-    cli.write_points([{ 'measurement': INFLUX['measurement'], 'fields': {
+def log_point(cli, temp, cmd, sw, pid_out):
+    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': {
         'sensors_temp': temp,
         'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
         'auto_mode': int(sw.auto_mode),
         'window_open': int(sw.window_open),
-        'manual_speed': manual_speed,
+        'pid_output': pid_out,
     }}])
 
-# ───────── main petlja ───────────────────────────────────────────────
+# ───────── main loop ───────────────────────────────────────────────
 
 def main():
     sensor = setup_sensor()
-    pwms   = setup_gpio()
-    cli    = influx_client()
+    pwms = setup_gpio()
+    cli = influx_client()
+
     target = DEFAULT_TARGET
-    manual = DEFAULT_MANUAL_SPEED
-    print('Controller running… Ctrl‑C to exit')
+    manual = 0
+    pid_p = PIDParams(**DEFAULT_PID)
+
+    integral = 0.0
+    prev_error = 0.0
+    last_loop = time.time()
+    next_pid_reset = last_loop + PID_RESET_INTERVAL
+
+    print('Unified Climate Controller running… Ctrl-C to exit')
     try:
         while True:
-            target, manual = fetch_config(cli, target, manual)
-            t = read_temp(sensor)
-            if t is None:
-                time.sleep(LOG_INTERVAL); continue
-            sw  = read_switches()
-            cmd = compute_command(t, target, sw, manual)
-            update_leds(cmd.fan_speed, pwms)
-            log_point(cli, t, cmd, sw, manual)
+            now = time.time()
+            dt = now - last_loop
+            last_loop = now
 
-            # status string
-            if manual in (1, 2, 3):
-                mode = f'MANUAL-{manual}'
-            else:
-                if sw.window_open:
-                    mode = 'OFF'
-                elif not sw.auto_mode:
-                    mode = 'LOW'
-                else:
-                    mode = 'AUTO'
-            print(f"{time.strftime('%H:%M:%S')}  T={t:5.2f}°C  Set={target:.2f}°C  {mode:<7}  FAN={cmd.fan_speed}  AC={cmd.ac_intensity:5.1f}%")
+            if now >= next_pid_reset:
+                integral, prev_error = 0.0, 0.0
+                next_pid_reset += PID_RESET_INTERVAL
+
+            target, manual, pid_p = fetch_config(cli, target, manual, pid_p)
+
+            temp = read_temp(sensor)
+            if temp is None:
+                time.sleep(LOG_INTERVAL); continue
+
+            delta = abs(temp - target)
+            pid_out, integral, prev_error = pid_step(delta, dt, pid_p, integral, prev_error)
+
+            sw = read_switches()
+            cmd = compute_command(temp, target, sw, manual, pid_out)
+
+            update_leds(cmd.fan_speed, pwms)
+            log_point(cli, temp, cmd, sw, pid_out)
+
+            mode = ('WINDOW' if sw.window_open else
+                    'AUTO' if sw.auto_mode else 'LOW')
+            print(f"{time.strftime('%H:%M:%S')}  "
+                  f"T={temp:5.2f}°C  Set={target:.2f}°C  "
+                  f"{mode:<6}  FAN={cmd.fan_speed}  "
+                  f"AC={cmd.ac_intensity:5.1f}%  "
+                  f"PID({pid_p.kp:.2f},{pid_p.ki:.2f},{pid_p.kd:.2f})")
+
             time.sleep(LOG_INTERVAL)
+
     except KeyboardInterrupt:
         print('\nBye')
     finally:
-        for p in pwms: p.stop(); GPIO.cleanup()
+        for p in pwms: p.stop()
+        GPIO.cleanup()
 
 if __name__ == '__main__':
     main()
