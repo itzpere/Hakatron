@@ -12,10 +12,12 @@ Sensors:
 - Mode state (switch)
 """
 from __future__ import annotations
-import glob, os, time
+import glob, os, time, sys
 from dataclasses import dataclass
+import traceback
 import RPi.GPIO as GPIO
 from influxdb import InfluxDBClient
+from influxdb.exceptions import InfluxDBClientError, InfluxDBServerError
 
 # ───────── pinout & constants ───────────────────────────────────────
 PIN_SW1, PIN_SW2 = 23, 24
@@ -23,10 +25,16 @@ PIN_SW1, PIN_SW2 = 23, 24
 LOG_INTERVAL = 1.0  # s - 1 second regular updates
 CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 
+# The host should be the IP address or hostname of the machine running InfluxDB
+# If InfluxDB is running on the same machine, use 'localhost'
+# If running on a different machine, use that machine's IP address
 INFLUX = {
-    'host': 'localhost', 'port': 8086,
-    'username': 'admin', 'password': 'mia',
-    'database': 'mydb',  'measurement': 'pi',
+    'host': '10.147.18.192',  # Changed from 'localhost' to the lab server IP
+    'port': 8086,
+    'username': 'admin', 
+    'password': 'mia',
+    'database': 'mydb',  
+    'measurement': 'pi',
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
@@ -68,47 +76,128 @@ def read_switches() -> SwitchState:
 # ───────── Influx helpers ──────────────────────────────────────────
 
 def influx_client():
-    return InfluxDBClient(**{k: INFLUX[k]
-                             for k in ('host', 'port', 'username', 'password', 'database')})
+    """Set up a connection to InfluxDB with error handling"""
+    try:
+        client = InfluxDBClient(**{k: INFLUX[k] 
+                               for k in ('host', 'port', 'username', 'password')})
+        
+        # Check connection by getting server version
+        version = client.ping()
+        print(f"Connected to InfluxDB server: {version}")
+        
+        # Check if database exists, create if it doesn't
+        dbs = [db['name'] for db in client.get_list_database()]
+        print(f"Available databases: {dbs}")
+        
+        if INFLUX['database'] not in dbs:
+            print(f"Creating database '{INFLUX['database']}'...")
+            client.create_database(INFLUX['database'])
+        
+        # Switch to the specified database
+        client.switch_database(INFLUX['database'])
+        print(f"Using database: {INFLUX['database']}")
+        return client
+        
+    except InfluxDBClientError as e:
+        print(f"InfluxDB client error: {e}")
+        return None
+    except InfluxDBServerError as e:
+        print(f"InfluxDB server error: {e}")
+        return None
+    except Exception as e:
+        print(f"Error connecting to InfluxDB: {e}")
+        return None
 
 def log_sensor_data(cli, temp, sw):
-    """Log only sensor data to the database"""
-    fields = {
-        'sensors_temp': temp,
-        'window_open': int(sw.window_open),
-        'presence': int(sw.auto_mode),  # Using auto_mode pin to represent presence
-    }
-    
-    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': fields}])
+    """Log only sensor data to the database with error handling"""
+    if cli is None:
+        print("No database connection, skipping data logging")
+        return False
+        
+    try:
+        fields = {
+            'sensors_temp': float(temp),  # Ensure it's a float
+            'window_open': int(sw.window_open),
+            'presence': int(sw.auto_mode),  # Using auto_mode pin to represent presence
+        }
+        
+        point = {
+            'measurement': INFLUX['measurement'], 
+            'fields': fields
+        }
+        
+        print(f"Sending to InfluxDB: {point}")
+        result = cli.write_points([point])
+        
+        if result:
+            print(f"Successfully wrote data to InfluxDB")
+        else:
+            print(f"Failed to write data to InfluxDB")
+            
+        return result
+    except InfluxDBClientError as e:
+        print(f"InfluxDB client error while logging: {e}")
+        return False
+    except InfluxDBServerError as e:
+        print(f"InfluxDB server error while logging: {e}")
+        return False
+    except Exception as e:
+        print(f"Error logging data to InfluxDB: {e}")
+        traceback.print_exc()
+        return False
     
 # ───────── main loop ───────────────────────────────────────────────
 
 def main():
-    sensor = setup_sensor()
-    setup_gpio()
+    try:
+        sensor = setup_sensor()
+        setup_gpio()
+    except Exception as e:
+        print(f"Error setting up sensors: {e}")
+        sys.exit(1)
+    
+    # Connect to InfluxDB
     cli = influx_client()
+    if cli is None:
+        print("Warning: Failed to connect to InfluxDB. Will retry periodically.")
     
     # Track previous sensor states to detect changes
     prev_window_state = False
     prev_auto_mode = True
     
     last_loop = time.time()
+    last_db_retry = time.time()
+    db_retry_interval = 30  # seconds
 
     print('Sensor Controller running… Ctrl-C to exit')
     try:
         while True:
             now = time.time()
             last_loop = now
+            
+            # Try to reconnect to database if connection was lost
+            if cli is None and (now - last_db_retry) >= db_retry_interval:
+                print("Attempting to reconnect to InfluxDB...")
+                cli = influx_client()
+                last_db_retry = now
 
             # Read temperature sensor
-            temp = read_temp(sensor)
-            if temp is None:
-                print("Temperature sensor read error")
-                time.sleep(min(1.0, LOG_INTERVAL))
-                continue
-
+            try:
+                temp = read_temp(sensor)
+                if temp is None:
+                    print("Temperature sensor read error")
+                    time.sleep(min(1.0, LOG_INTERVAL))
+                    continue
+            except Exception as e:
+                print(f"Error reading temperature: {e}")
+                temp = 22.0  # Default fallback value
+            
             # Read switch sensors
-            sw = read_switches()
+            try:
+                sw = read_switches()
+            except Exception as e:
+                print(f"Error reading switches: {e}")
+                sw = SwitchState(auto_mode=prev_auto_mode, window_open=prev_window_state)
             
             # Check for sensor changes that should be logged immediately
             sensor_changed = (sw.window_open != prev_window_state or 
@@ -124,19 +213,27 @@ def main():
             prev_auto_mode = sw.auto_mode
             
             # Regular logging at each interval
-            log_sensor_data(cli, temp, sw)
+            log_result = log_sensor_data(cli, temp, sw)
+            db_status = "OK" if log_result else "FAIL"
 
             print(f"{time.strftime('%H:%M:%S')}  "
                   f"T={temp:5.2f}°C  "
                   f"Window={'OPEN' if sw.window_open else 'CLOSED'}  "
-                  f"Presence={'DETECTED' if sw.auto_mode else 'NONE'}")
+                  f"Presence={'DETECTED' if sw.auto_mode else 'NONE'}  "
+                  f"DB={db_status}")
 
             time.sleep(LOG_INTERVAL)
 
     except KeyboardInterrupt:
         print('\nBye')
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        traceback.print_exc()
     finally:
-        GPIO.cleanup()
+        try:
+            GPIO.cleanup()
+        except:
+            pass
 
 if __name__ == '__main__':
     main()
