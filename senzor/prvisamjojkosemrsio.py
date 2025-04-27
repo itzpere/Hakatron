@@ -29,7 +29,7 @@ CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 # If InfluxDB is running on the same machine, use 'localhost'
 # If running on a different machine, use that machine's IP address
 INFLUX = {
-    'host': '10.147.18.192',  # Changed from 'localhost' to the lab server IP
+    'host': 'localhost',  # Changed from 'localhost' to the lab server IP
     'port': 8086,
     'username': 'admin', 
     'password': 'mia',
