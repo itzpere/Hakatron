@@ -132,7 +132,7 @@ def influx_client():
     return InfluxDBClient(**{k: INFLUX[k]
                              for k in ('host', 'port', 'username', 'password', 'database')})
 
-def fetch_config(cli, target: float, manual: int, pid_p: PIDParams) -> tuple[float, int, PIDParams]:
+def fetch_config(cli, target: float, manual: int, pid_p: PIDParams, current_mode=None) -> tuple[float, int, PIDParams, str]:
     try:
         res = cli.query('SELECT LAST(target_temp) FROM config')
         if res:
@@ -153,7 +153,19 @@ def fetch_config(cli, target: float, manual: int, pid_p: PIDParams) -> tuple[flo
         )
     except Exception:
         pass
-    return target, manual, pid_p
+    
+    # Try to get server-set mode (has priority over switch-based mode)
+    server_mode = None
+    try:
+        res = cli.query('SELECT LAST(mode) FROM config')
+        if res and list(res.get_points()):
+            server_mode = list(res.get_points())[0]['last']
+            if server_mode and isinstance(server_mode, str):
+                current_mode = server_mode
+    except Exception:
+        pass
+        
+    return target, manual, pid_p, current_mode
 
 def log_point(cli, temp, cmd, sw, target, mode, manual_speed=0, pid_output=None):
     fields = {
@@ -181,6 +193,7 @@ def main():
     target = DEFAULT_TARGET
     manual = 0
     pid_p = PIDParams(**DEFAULT_PID)
+    current_mode = None  # Initialize current mode
 
     integral = 0.0
     prev_error = 0.0
@@ -198,7 +211,8 @@ def main():
                 integral, prev_error = 0.0, 0.0
                 next_pid_reset += PID_RESET_INTERVAL
 
-            target, manual, pid_p = fetch_config(cli, target, manual, pid_p)
+            # Get config including possible server-set mode
+            target, manual, pid_p, server_mode = fetch_config(cli, target, manual, pid_p, current_mode)
 
             temp = read_temp(sensor)
             if temp is None:
@@ -212,10 +226,22 @@ def main():
 
             update_leds(cmd.fan_speed, pwms)
             
-            # Define mode before using it in log_point
-            mode = ('WINDOW' if sw.window_open else
-                    'AUTO' if sw.auto_mode else 'LOW')
-                    
+            # Determine mode based on switches (if server hasn't set one)
+            local_mode = ('WINDOW' if sw.window_open else 
+                         'AUTO' if sw.auto_mode else 'LOW')
+            
+            # Use server mode if available, otherwise use locally determined mode
+            mode = server_mode if server_mode else local_mode
+            current_mode = mode  # Update current mode for next iteration
+            
+            # Special case: window open always forces WINDOW mode for safety
+            if sw.window_open:
+                mode = 'WINDOW'
+                
+            # Handle manual mode if a manual speed is set
+            if manual in (1, 2, 3) and mode != 'WINDOW':
+                mode = 'MANUAL'
+                
             # Update log_point call to include manual speed and pid_output
             log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
 
