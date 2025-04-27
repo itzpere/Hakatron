@@ -26,7 +26,8 @@ PIN_LED1, PIN_LED2, PIN_LED3 = 17, 27, 22
 PWM_FREQ = 1000  # Hz
 
 DEFAULT_TARGET = 22.0  # °C
-LOG_INTERVAL = 5.0  # s
+LOG_INTERVAL = 2.0  # s - reduced from 5.0s to 2.0s for faster updates
+CONFIG_CHECK_INTERVAL = 10.0  # s - only check for config changes every 10 seconds
 PID_RESET_INTERVAL = 10.0  # s
 
 DEFAULT_PID = {'kp': 8.0, 'ki': 0.20, 'kd': 1.0}
@@ -133,51 +134,46 @@ def influx_client():
                              for k in ('host', 'port', 'username', 'password', 'database')})
 
 def fetch_config(cli, target: float, manual: int, pid_p: PIDParams, current_mode=None) -> tuple[float, int, PIDParams, str]:
+    """Fetch configuration from database with optimized queries"""
     try:
-        res = cli.query('SELECT LAST(target_temp) FROM config')
-        if res:
-            target = float(list(res.get_points())[0]['last'])
-    except Exception:
-        pass
-    try:
-        res = cli.query('SELECT LAST(manual_speed) FROM config')
-        if res:
-            manual = int(list(res.get_points())[0]['last'])
-    except Exception:
-        pass
-    try:
-        pid_p = PIDParams(
-            kp=float(list(cli.query('SELECT LAST(kp) FROM config').get_points())[0]['last']),
-            ki=float(list(cli.query('SELECT LAST(ki) FROM config').get_points())[0]['last']),
-            kd=float(list(cli.query('SELECT LAST(kd) FROM config').get_points())[0]['last'])
-        )
-    except Exception:
-        pass
-    
-    # Try to get server-set mode (has priority over switch-based mode)
-    server_mode = None
-    try:
-        res = cli.query('SELECT LAST(mode) FROM config')
-        if res and list(res.get_points()):
-            server_mode = list(res.get_points())[0]['last']
-            if server_mode and isinstance(server_mode, str):
-                current_mode = server_mode
-    except Exception:
-        pass
+        # Use a single query to get all config parameters at once for better performance
+        multi_query = ("SELECT LAST(target_temp), LAST(manual_speed), "
+                       "LAST(kp), LAST(ki), LAST(kd), LAST(mode) FROM config")
+        results = cli.query(multi_query)
         
+        if results:
+            points = list(results.get_points())
+            if points and len(points) > 0:
+                point = points[0]
+                
+                # Extract values from the combined query result
+                if point.get('last_target_temp') is not None:
+                    target = float(point['last_target_temp'])
+                if point.get('last_manual_speed') is not None:
+                    manual = int(point['last_manual_speed'])
+                if all(k in point for k in ['last_kp', 'last_ki', 'last_kd']):
+                    pid_p = PIDParams(
+                        kp=float(point.get('last_kp', pid_p.kp)),
+                        ki=float(point.get('last_ki', pid_p.ki)),
+                        kd=float(point.get('last_kd', pid_p.kd))
+                    )
+                if point.get('last_mode') is not None:
+                    server_mode = point['last_mode']
+                    if server_mode and isinstance(server_mode, str):
+                        current_mode = server_mode
+    except Exception as e:
+        print(f"Config fetch error: {e}")
+    
     return target, manual, pid_p, current_mode
 
 def log_point(cli, temp, cmd, sw, target, mode, manual_speed=0, pid_output=None):
     fields = {
         'sensors_temp': temp,
         'temperature': temp,  # Add temperature field (same as sensors_temp)
-        'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
-        'auto_mode': int(sw.auto_mode),
         'window_open': int(sw.window_open),
         'target_temp': target,
         'mode': mode,
-        'manual_speed': manual_speed,  # Add manual speed field
         'pid_output': pid_output if pid_output is not None else 0  # Add PID output field
     }
     
@@ -199,6 +195,7 @@ def main():
     prev_error = 0.0
     last_loop = time.time()
     next_pid_reset = last_loop + PID_RESET_INTERVAL
+    next_config_check = last_loop  # Check config on first run
 
     print('Unified Climate Controller running… Ctrl-C to exit')
     try:
@@ -211,12 +208,15 @@ def main():
                 integral, prev_error = 0.0, 0.0
                 next_pid_reset += PID_RESET_INTERVAL
 
-            # Get config including possible server-set mode
-            target, manual, pid_p, server_mode = fetch_config(cli, target, manual, pid_p, current_mode)
+            # Only check for config updates periodically to reduce database load
+            if now >= next_config_check:
+                target, manual, pid_p, server_mode = fetch_config(cli, target, manual, pid_p, current_mode)
+                next_config_check = now + CONFIG_CHECK_INTERVAL
 
             temp = read_temp(sensor)
             if temp is None:
-                time.sleep(LOG_INTERVAL); continue
+                time.sleep(min(1.0, LOG_INTERVAL))  # Shorter wait on sensor error
+                continue
 
             delta = abs(temp - target)
             pid_out, integral, prev_error = pid_step(delta, dt, pid_p, integral, prev_error)

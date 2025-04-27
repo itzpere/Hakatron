@@ -7,7 +7,7 @@ import random
 
 # Define all configuration variables at the top
 DEVICE_NAME = "pi"
-USE_RANDOM_DATA = True  # Flag to control whether to use random data
+USE_RANDOM_DATA = False  # Changed from True to False to prioritize database values
 RANDOM_TEMP_MIN = 18
 RANDOM_TEMP_MAX = 30
 RANDOM_VARIATION = 0.5
@@ -49,11 +49,13 @@ SENSOR_ON_COLOR = '#4CAF50'  # Green
 SENSOR_OFF_COLOR = 'gray'
 
 # InfluxDB connection parameters
-INFLUXDB_URL = "localhost"
+INFLUXDB_URL = "10.147.18.192"  # You may need to change this to the actual host if not localhost
 INFLUXDB_PORT = 8086
 INFLUXDB_USER = "admin"
 INFLUXDB_PASSWORD = "mia"
 INFLUXDB_DATABASE = "mydb"
+MAX_RETRY_ATTEMPTS = 3  # Number of times to retry connection
+CONNECTION_TIMEOUT = 5  # Timeout in seconds
 
 # Temperature ranges for display (will be overridden by dynamic values)
 TEMP_RANGE_COLD = 20
@@ -177,41 +179,214 @@ try:
 except ImportError:
     influxdb_available = False
 
+# Function to check if data is recent enough to be considered valid
+def is_data_recent(timestamp_str, max_age_seconds=30):
+    """Check if a timestamp is recent enough to be considered valid"""
+    if not timestamp_str:
+        return False
+    try:
+        # Parse the timestamp
+        from dateutil import parser
+        import pytz
+        from datetime import datetime, timedelta
+        
+        # Parse the timestamp string
+        dt = parser.parse(timestamp_str)
+        
+        # Make sure it's timezone aware
+        if dt.tzinfo is None:
+            dt = pytz.UTC.localize(dt)
+        
+        # Get current time
+        now = datetime.now(pytz.UTC)
+        
+        # Check if data is recent
+        return (now - dt) <= timedelta(seconds=max_age_seconds)
+    except Exception as e:
+        print(f"Error checking data freshness: {e}")
+        return False
+
+# Function to fetch latest sensor values from database
+def fetch_latest_sensor_data():
+    global temp_data, fan_speed, window_open, movement_detected, target_temperature, ACTIVE_MODE
+    
+    if client is None:
+        print("No database connection, using random data")
+        return False
+
+    try:
+        # Get the latest temperature
+        temp_result = client.query('SELECT LAST(sensors_temp) FROM environment')
+        if temp_result:
+            points = list(temp_result.get_points())
+            if points:
+                latest_temp = points[0]['last']
+                latest_time = points[0]['time']
+                
+                if is_data_recent(latest_time):
+                    # Only update if we have temperature data
+                    if latest_temp is not None:
+                        # Add to our data store
+                        temp_data['time'].append(datetime.now().strftime('%H:%M:%S'))
+                        temp_data['temperature'].append(latest_temp)
+                        
+                        # Keep only most recent data points
+                        if len(temp_data['time']) > MAX_DATA_POINTS:
+                            temp_data['time'] = temp_data['time'][-MAX_DATA_POINTS:]
+                            temp_data['temperature'] = temp_data['temperature'][-MAX_DATA_POINTS:]
+        
+        # Get the latest fan speed (ac_intensity in database)
+        fan_result = client.query('SELECT LAST(ac_intensity) FROM environment')
+        if fan_result:
+            points = list(fan_result.get_points())
+            if points and points[0]['last'] is not None:
+                latest_fan = points[0]['last']
+                fan_speed = int(latest_fan)
+                
+                # Update fan history
+                current_time = datetime.now().strftime('%H:%M:%S')
+                fan_history['time'].append(current_time)
+                fan_history['speed'].append(fan_speed)
+                
+                # Keep only recent history
+                if len(fan_history['time']) > MAX_DATA_POINTS:
+                    fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+                    fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
+        # Get the latest window state
+        window_result = client.query('SELECT LAST(window_open) FROM environment')
+        if window_result:
+            points = list(window_result.get_points())
+            if points and points[0]['last'] is not None:
+                window_open = bool(int(points[0]['last']))
+                
+                # Update window history
+                current_time = datetime.now().strftime('%H:%M:%S')
+                window_history['time'].append(current_time)
+                window_history['state'].append(1 if window_open else 0)
+                
+                # Keep only recent history
+                if len(window_history['time']) > MAX_DATA_POINTS:
+                    window_history['time'] = window_history['time'][-MAX_DATA_POINTS:]
+                    window_history['state'] = window_history['state'][-MAX_DATA_POINTS:]
+        
+        # Get the target temperature
+        target_result = client.query('SELECT LAST(target_temp) FROM environment')
+        if target_result:
+            points = list(target_result.get_points())
+            if points and points[0]['last'] is not None:
+                target_temperature = float(points[0]['last'])
+        
+        # Get the active mode
+        mode_result = client.query('SELECT LAST(mode) FROM environment')
+        if mode_result:
+            points = list(mode_result.get_points())
+            if points and points[0]['last'] is not None:
+                mode = points[0]['last']
+                if mode in ["PID", "AUTO", "WINDOW", "MANUAL", "LOW", "Automatic", "Ručni"]:
+                    # Map the modes from the sensor to our dashboard modes
+                    mode_mapping = {
+                        "PID": "PID",
+                        "AUTO": "Automatic",
+                        "MANUAL": "Ručni",
+                        "LOW": "Ručni",
+                        "WINDOW": "Automatic",  # When window open, default to Automatic
+                    }
+                    ACTIVE_MODE = mode_mapping.get(mode, mode)
+                    
+                    # Update control states based on mode
+                    if ACTIVE_MODE == "PID":
+                        temp_control_disabled = False
+                        fan_control_disabled = True
+                    elif ACTIVE_MODE == "Automatic":
+                        temp_control_disabled = True
+                        fan_control_disabled = True
+                    elif ACTIVE_MODE == "Ručni":
+                        temp_control_disabled = True
+                        fan_control_disabled = False
+        
+        return True
+    except Exception as e:
+        print(f"Error fetching sensor data from database: {e}")
+        return False
+
 # Initialize InfluxDB client if available
 client = None
-if influxdb_available and not USE_RANDOM_DATA:
+connection_error = None
+if influxdb_available:
     try:
-        client = InfluxDBClient(
-            host=INFLUXDB_URL,
-            port=INFLUXDB_PORT,
-            username=INFLUXDB_USER,
-            password=INFLUXDB_PASSWORD,
-            database=INFLUXDB_DATABASE
-        )
-        print("Successfully connected to InfluxDB")
+        # Import with timeout support
+        import urllib3
+        import time  # Add explicit import here to ensure it's available
+        from requests.exceptions import ConnectionError
         
-        # List all available databases
-        databases = client.get_list_database()
-        print(f"Available databases: {databases}")
+        # Set a timeout for the connection
+        urllib3.util.Timeout(connect=CONNECTION_TIMEOUT, read=CONNECTION_TIMEOUT)
         
-        # Check if our database exists
-        if any(db['name'] == INFLUXDB_DATABASE for db in databases):
-            print(f"Database '{INFLUXDB_DATABASE}' found!")
+        # Try to connect with retries
+        retry_count = 0
+        while retry_count < MAX_RETRY_ATTEMPTS:
+            try:
+                client = InfluxDBClient(
+                    host=INFLUXDB_URL,
+                    port=INFLUXDB_PORT,
+                    username=INFLUXDB_USER,
+                    password=INFLUXDB_PASSWORD,
+                    database=INFLUXDB_DATABASE,
+                    timeout=CONNECTION_TIMEOUT
+                )
+                print(f"Successfully connected to InfluxDB on attempt {retry_count+1}")
+                
+                # Test the connection by querying the database list
+                databases = client.get_list_database()
+                print(f"Available databases: {databases}")
+                
+                # Check if our database exists
+                if any(db['name'] == INFLUXDB_DATABASE for db in databases):
+                    print(f"Database '{INFLUXDB_DATABASE}' found!")
+                else:
+                    print(f"Database '{INFLUXDB_DATABASE}' not found!")
+                    # Create the database if it doesn't exist
+                    client.create_database(INFLUXDB_DATABASE)
+                    print(f"Created database '{INFLUXDB_DATABASE}'")
+                
+                # Switch to our database
+                client.switch_database(INFLUXDB_DATABASE)
+                
+                # Connection successful, break the retry loop
+                break
+            
+            except ConnectionError as e:
+                retry_count += 1
+                connection_error = str(e)
+                print(f"Connection attempt {retry_count} failed: {e}")
+                if retry_count < MAX_RETRY_ATTEMPTS:
+                    print(f"Retrying in 2 seconds...")
+                    time.sleep(2)  # Now time should be defined
+                else:
+                    print(f"Max retry attempts reached. Falling back to random data.")
+                    USE_RANDOM_DATA = True
+                    client = None
+            
+        # If we still don't have a client after all retries
+        if client is None:
+            print("Could not connect to InfluxDB. Using random data instead.")
+            USE_RANDOM_DATA = True
         else:
-            print(f"Database '{INFLUXDB_DATABASE}' not found!")
-            # Create the database if it doesn't exist
-            client.create_database(INFLUXDB_DATABASE)
-            print(f"Created database '{INFLUXDB_DATABASE}'")
-        
-        # Switch to our database
-        client.switch_database(INFLUXDB_DATABASE)
+            # Try to fetch initial values
+            if not fetch_latest_sensor_data():
+                print("Could not fetch latest data, falling back to random data")
+                USE_RANDOM_DATA = True
+    
     except Exception as e:
+        connection_error = str(e)
         print(f"Database setup error: {e}")
         client = None
         USE_RANDOM_DATA = True
 else:
     USE_RANDOM_DATA = True
-    print("Using random data for temperature values")
+    connection_error = "InfluxDB client not available (module not installed)"
+    print("Using random data for temperature values (InfluxDB not available)")
 
 # Define a unique ID for the fan speed output to avoid conflicts
 FAN_SPEED_OUTPUT_ID = 'fan-speed-output-v1'
@@ -220,6 +395,22 @@ FAN_SPEED_OUTPUT_ID = 'fan-speed-output-v1'
 layout = html.Div([
     # Store component to track device state (on/off)
     dcc.Store(id='device-state', data={'on': DEVICE_ON}),
+    
+    # Add connection status message if there was an error
+    html.Div([
+        html.Div(
+            f"WARNING: Using simulated data - InfluxDB connection failed: {connection_error}",
+            style={
+                'backgroundColor': '#fff3cd',
+                'color': '#856404',
+                'padding': '10px',
+                'borderRadius': '5px',
+                'marginBottom': '10px',
+                'fontWeight': 'bold',
+                'display': 'block' if USE_RANDOM_DATA and connection_error else 'none'
+            }
+        )
+    ], style={'margin': '20px', 'marginBottom': '0px'}),
     
     # ON/OFF button at the top
     html.Div([
@@ -511,23 +702,21 @@ def log_parameters_to_influxdb():
                     'measurement': 'fan',
                     'time': current_time,
                     'fields': {
-                        'speed': int(fan_speed)
+                        'speed': int(fan_speed)  # This is just for our internal metrics
                     }
                 },
                 {
-                    'measurement': 'sensors',
+                    'measurement': INFLUX['measurement'],  # Use the environment measurement
                     'time': current_time,
                     'fields': {
+                        'sensors_temp': temp_data['temperature'][-1] if temp_data['temperature'] else None,
+                        'ac_intensity': float(fan_speed),  # Map fan_speed to ac_intensity for the main environment measurement
+                        'fan_speed': 1 if fan_speed > 0 else 0,  # Basic fan_speed setting (on/off)
                         'movement': int(movement_detected),
-                        'window': int(window_open)
-                    }
-                },
-                {
-                    'measurement': 'device',
-                    'time': current_time,
-                    'fields': {
-                        'on': int(DEVICE_ON),
-                        'mode': ACTIVE_MODE
+                        'window_open': int(window_open),
+                        'target_temp': float(target_temperature),
+                        'mode': ACTIVE_MODE,
+                        'on': int(DEVICE_ON)
                     }
                 }
             ]
@@ -667,7 +856,7 @@ def update_target_temperature(n_clicks, value):
         
     return [f"{target_temperature} °C"]
 
-# Current temperature callback - MODIFIED to remove current-temp output
+# Current temperature callback - MODIFIED to try reading from database first
 @callback(
     [Output('heater-status', 'style'),
      Output('heater-status-text', 'children'),
@@ -678,6 +867,22 @@ def update_target_temperature(n_clicks, value):
     [Input('interval-component', 'n_intervals')]
 )
 def update_current_temp(n):
+    # First try to get data from the database
+    use_random = USE_RANDOM_DATA
+    if not use_random:
+        if not fetch_latest_sensor_data():
+            use_random = True
+    
+    # If database retrieval failed or we're using random data
+    if use_random:
+        # Update movement and window sensor states randomly
+        is_movement = update_movement_sensor()
+        is_window_open = update_window_sensor()
+    else:
+        # Use the values fetched from the database
+        is_movement = movement_detected
+        is_window_open = window_open
+    
     if temp_data['temperature']:
         current_temp = temp_data['temperature'][-1]
         
@@ -695,10 +900,6 @@ def update_current_temp(n):
             'verticalAlign': 'middle'
         }
         heater_text = "ON" if is_heater_on else "OFF"
-        
-        # Update movement and window sensor states
-        is_movement = update_movement_sensor()
-        is_window_open = update_window_sensor()
         
         # Set movement status color and text
         movement_style = {
@@ -861,7 +1062,7 @@ def update_fan_display(slider_value, n_intervals):
     # Return both the gauge figure and text display
     return fig, fan_text
 
-# Temperature graph callback - modify the existing function
+# Temperature graph callback - update to use database data first
 @callback(
     [Output('temperature-graph', 'figure'),
      Output('x-range-store', 'data')],
@@ -894,13 +1095,14 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
         # No need to update range data when device is off
         return fig, x_range_data or {}
     
-    # Existing code for when device is on
+    # Use random data only if explicitly set or if database retrieval fails
     use_random = USE_RANDOM_DATA
     
-    # Try to query from InfluxDB if available and if random data is not forced
-    if client is not None and not USE_RANDOM_DATA:
+    # Try to query from InfluxDB if available and not using random data
+    if client is not None and not use_random:
         try:
-            query = f'SELECT time, value FROM temperature WHERE time > now() - 1h'
+            # Query historical temperature data for the last hour
+            query = 'SELECT sensors_temp FROM environment WHERE time > now() - 1h'
             result = client.query(query)
             
             if result:
@@ -908,18 +1110,36 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                 points = list(result.get_points())
                 if points:
                     times = [point['time'] for point in points]
-                    temperatures = [point['value'] for point in points]
+                    temperatures = [point['sensors_temp'] for point in points if point['sensors_temp'] is not None]
                     
-                    # Update local cache
-                    temp_data['time'] = [t.split('T')[1].split('.')[0] for t in times[-MAX_DATA_POINTS:]]  # Format time
-                    temp_data['temperature'] = temperatures[-MAX_DATA_POINTS:]
-                    use_random = False
+                    if times and temperatures:
+                        # Update local cache
+                        temp_data['time'] = [t.split('T')[1].split('.')[0] for t in times[-MAX_DATA_POINTS:]]  # Format time
+                        temp_data['temperature'] = temperatures[-MAX_DATA_POINTS:]
+                    else:
+                        use_random = True  # Fall back to random if no valid data
+            else:
+                use_random = True  # No results, fall back to random
+                
+            # Query historical fan speed data (ac_intensity in database)
+            fan_query = 'SELECT ac_intensity FROM environment WHERE time > now() - 1h'
+            fan_result = client.query(fan_query)
+            
+            if fan_result:
+                fan_points = list(fan_result.get_points())
+                if fan_points:
+                    fan_times = [point['time'] for point in fan_points]
+                    fan_speeds = [point['ac_intensity'] for point in fan_points if point['ac_intensity'] is not None]
+                    
+                    if fan_times and fan_speeds:
+                        fan_history['time'] = [t.split('T')[1].split('.')[0] for t in fan_times[-MAX_DATA_POINTS:]]
+                        fan_history['speed'] = fan_speeds[-MAX_DATA_POINTS:]
         except Exception as e:
-            print(f"Error querying temperature data: {e}")
-            use_random = True
+            print(f"Error querying historical data: {e}")
+            use_random = True  # Fall back to random on error
     
     # Generate random data if needed
-    if use_random:
+    if use_random and len(temp_data['time']) < 2:  # Only generate if we don't have enough data
         current_time = datetime.now().strftime('%H:%M:%S')
         # Generate a somewhat realistic temperature value
         if not temp_data['temperature']:
