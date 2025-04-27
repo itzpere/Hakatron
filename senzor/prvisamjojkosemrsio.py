@@ -37,7 +37,7 @@ LOW_AC = 10.0
 INFLUX = {
     'host': 'localhost', 'port': 8086,
     'username': 'admin', 'password': 'mia',
-    'database': 'mydb',  'measurement': 'environmen',
+    'database': 'mydb',  'measurement': 'environment',
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
@@ -206,10 +206,13 @@ def main():
             cmd = compute_command(temp, target, sw, manual, pid_out)
 
             update_leds(cmd.fan_speed, pwms)
-            log_point(cli, temp, cmd, sw, target, mode)
-
+            
+            # Define mode before using it in log_point
             mode = ('WINDOW' if sw.window_open else
                     'AUTO' if sw.auto_mode else 'LOW')
+                    
+            log_point(cli, temp, cmd, sw, target, mode)
+
             print(f"{time.strftime('%H:%M:%S')}  "
                   f"T={temp:5.2f}°C  Set={target:.2f}°C  "
                   f"{mode:<6}  FAN={cmd.fan_speed}  "
