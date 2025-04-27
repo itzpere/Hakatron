@@ -72,15 +72,26 @@ def influx_client():
                              for k in ('host', 'port', 'username', 'password', 'database')})
 
 def log_sensor_data(cli, temp, sw):
-    """Log only sensor data to the database"""
+    """Log only sensor data to the database with error handling"""
+    # Round temperature to 3 decimal places for consistency
+    temp = round(temp, 3)
+    
     fields = {
         'sensors_temp': temp,
         'window_open': int(sw.window_open),
         'presence': int(sw.auto_mode),  # Using auto_mode pin to represent presence
     }
     
-    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': fields}])
-    
+    try:
+        result = cli.write_points([{'measurement': INFLUX['measurement'], 'fields': fields}])
+        if not result:
+            print(f"WARNING: Database write failed at {time.strftime('%H:%M:%S')}")
+            return False
+        return True
+    except Exception as e:
+        print(f"ERROR: Database write exception: {e}")
+        return False
+
 # ───────── main loop ───────────────────────────────────────────────
 
 def main():
@@ -113,14 +124,23 @@ def main():
             # Check for sensor changes that should be logged immediately
             sensor_changed = (sw.window_open != prev_window_state or 
                              sw.auto_mode != prev_auto_mode)
-            
-            # Immediately log any sensor changes to the database
+
+            # Only write once per loop iteration
+            write_success = False
             if sensor_changed:
                 print(f"Sensor change detected: window={sw.window_open}, presence={sw.auto_mode}")
-                log_sensor_data(cli, temp, sw)
+                write_success = log_sensor_data(cli, temp, sw)
             else:
-                # Only log at regular intervals if we haven't already logged due to change
-                log_sensor_data(cli, temp, sw)
+                # Only log at regular intervals if no sensor change
+                write_success = log_sensor_data(cli, temp, sw)
+
+            if not write_success:
+                # Try to reconnect if write failed
+                print("Attempting to reconnect to database...")
+                try:
+                    cli = influx_client()
+                except Exception as e:
+                    print(f"Reconnection failed: {e}")
 
             # Store current states for next comparison
             prev_window_state = sw.window_open
