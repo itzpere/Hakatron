@@ -26,7 +26,7 @@ CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 INFLUX = {
     'host': 'localhost', 'port': 8086,
     'username': 'admin', 'password': 'mia',
-    'database': 'mydb',  'measurement': 'pii',
+    'database': 'mydb',  'measurement': 'pi',
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
