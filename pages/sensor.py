@@ -795,13 +795,37 @@ def update_temp_gauge(n):
     
     return fig
 
-# Fan gauge callback
+# Combined fan speed callback - handles both gauge and text display
 @callback(
-    Output('fan-gauge', 'figure'),
-    Input('interval-component', 'n_intervals')
+    [Output('fan-gauge', 'figure'),
+     Output(FAN_SPEED_OUTPUT_ID, 'children')],
+    [Input('fan-speed-slider', 'value'),
+     Input('interval-component', 'n_intervals')],
+    prevent_initial_call=False
 )
-def update_fan_gauge(n):
-    # Create a gauge figure for fan speed
+def update_fan_display(slider_value, n_intervals):
+    """Update fan speed display and gauge when slider changes or on interval update"""
+    global fan_speed
+    
+    # Check context to see what triggered this callback
+    ctx = dash.callback_context
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    
+    # If slider changed, update the global fan speed
+    if trigger_id == 'fan-speed-slider' and slider_value is not None:
+        fan_speed = slider_value
+        
+        # Update fan history
+        current_time = datetime.now().strftime('%H:%M:%S')
+        fan_history['time'].append(current_time)
+        fan_history['speed'].append(slider_value)
+        
+        # Keep only recent history
+        if len(fan_history['time']) > MAX_DATA_POINTS:
+            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+    
+    # Create the gauge figure for fan speed
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=fan_speed,
@@ -823,15 +847,19 @@ def update_fan_gauge(n):
         }
     ))
     
-    # Remove margins and make it compact
+    # Format the gauge layout
     fig.update_layout(
         margin=dict(l=10, r=10, t=30, b=10),
         height=200,
-        paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
-        plot_bgcolor='rgba(0,0,0,0)'    # Transparent plot area
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
     )
     
-    return fig  # Only return the figure, not the text
+    # Create text display
+    fan_text = f'Current: {fan_speed}%'
+    
+    # Return both the gauge figure and text display
+    return fig, fan_text
 
 # Temperature graph callback - modify the existing function
 @callback(
@@ -1207,36 +1235,3 @@ def toggle_device(n_clicks, current_state):
     log_parameters_to_influxdb()
     
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
-
-# Fan speed callback consolidated - now also logs to InfluxDB
-@callback(
-    Output(FAN_SPEED_OUTPUT_ID, 'children'),
-    [Input('fan-speed-slider', 'value')],
-    prevent_initial_call=False
-)
-def update_fan_speed_display(value):
-    """Update fan speed display when slider changes"""
-    # Declare global variable at the beginning of the function, before any usage
-    global fan_speed
-    
-    # If value is None (initial load), use the global fan_speed
-    if value is None:
-        return f'Current: {fan_speed}%'
-    
-    # Update global fan speed and history
-    fan_speed = value
-    
-    # Update fan history
-    current_time = datetime.now().strftime('%H:%M:%S')
-    fan_history['time'].append(current_time)
-    fan_history['speed'].append(value)
-    
-    # Keep only recent history
-    if len(fan_history['time']) > MAX_DATA_POINTS:
-        fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
-        fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
-    
-    # Log the fan speed change to InfluxDB
-    log_parameters_to_influxdb()
-    
-    return f'Current: {value}%'
