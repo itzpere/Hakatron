@@ -37,7 +37,7 @@ LOW_AC = 10.0
 INFLUX = {
     'host': 'localhost', 'port': 8086,
     'username': 'admin', 'password': 'mia',
-    'database': 'mydb',  'measurement': 'environment',
+    'database': 'mydb',  'measurement': 'environmen',
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
