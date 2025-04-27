@@ -29,12 +29,13 @@ CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 # If InfluxDB is running on the same machine, use 'localhost'
 # If running on a different machine, use that machine's IP address
 INFLUX = {
-    'host': 'localhost',  # Changed from 'localhost' to the lab server IP
+    'host': '10.147.18.192',  # Changed to the known lab server IP
     'port': 8086,
     'username': 'admin', 
     'password': 'mia',
     'database': 'mydb',  
     'measurement': 'pi',
+    'retention_policy': 'autogen'  # Add explicit retention policy
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
@@ -75,38 +76,22 @@ def read_switches() -> SwitchState:
 
 # ───────── Influx helpers ──────────────────────────────────────────
 
-def influx_client():
-    """Set up a connection to InfluxDB with error handling"""
+def check_data_exists(cli):
+    """Verify that we can read data from the database"""
     try:
-        client = InfluxDBClient(**{k: INFLUX[k] 
-                               for k in ('host', 'port', 'username', 'password')})
-        
-        # Check connection by getting server version
-        version = client.ping()
-        print(f"Connected to InfluxDB server: {version}")
-        
-        # Check if database exists, create if it doesn't
-        dbs = [db['name'] for db in client.get_list_database()]
-        print(f"Available databases: {dbs}")
-        
-        if INFLUX['database'] not in dbs:
-            print(f"Creating database '{INFLUX['database']}'...")
-            client.create_database(INFLUX['database'])
-        
-        # Switch to the specified database
-        client.switch_database(INFLUX['database'])
-        print(f"Using database: {INFLUX['database']}")
-        return client
-        
-    except InfluxDBClientError as e:
-        print(f"InfluxDB client error: {e}")
-        return None
-    except InfluxDBServerError as e:
-        print(f"InfluxDB server error: {e}")
-        return None
+        results = cli.query(f"SELECT * FROM {INFLUX['measurement']} ORDER BY time DESC LIMIT 5")
+        points = list(results.get_points())
+        if points:
+            print(f"Found {len(points)} recent data points in database:")
+            for point in points:
+                print(f"  - {point['time']}: temp={point.get('sensors_temp')}, window={point.get('window_open')}, presence={point.get('presence')}")
+            return True
+        else:
+            print(f"No data found in measurement '{INFLUX['measurement']}'")
+            return False
     except Exception as e:
-        print(f"Error connecting to InfluxDB: {e}")
-        return None
+        print(f"Error checking data: {e}")
+        return False
 
 def log_sensor_data(cli, temp, sw):
     """Log only sensor data to the database with error handling"""
@@ -115,6 +100,11 @@ def log_sensor_data(cli, temp, sw):
         return False
         
     try:
+        from datetime import datetime
+        
+        # Create a timestamp - important for InfluxDB
+        current_time = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+        
         fields = {
             'sensors_temp': float(temp),  # Ensure it's a float
             'window_open': int(sw.window_open),
@@ -122,12 +112,17 @@ def log_sensor_data(cli, temp, sw):
         }
         
         point = {
-            'measurement': INFLUX['measurement'], 
+            'measurement': INFLUX['measurement'],
+            'time': current_time,
             'fields': fields
         }
         
         print(f"Sending to InfluxDB: {point}")
-        result = cli.write_points([point])
+        result = cli.write_points(
+            [point], 
+            time_precision='ms',
+            retention_policy=INFLUX['retention_policy']
+        )
         
         if result:
             print(f"Successfully wrote data to InfluxDB")
@@ -145,7 +140,51 @@ def log_sensor_data(cli, temp, sw):
         print(f"Error logging data to InfluxDB: {e}")
         traceback.print_exc()
         return False
-    
+
+def influx_client():
+    """Set up a connection to InfluxDB with error handling"""
+    try:
+        client = InfluxDBClient(
+            host=INFLUX['host'], 
+            port=INFLUX['port'],
+            username=INFLUX['username'], 
+            password=INFLUX['password'],
+            database=None,  # Don't set database yet
+            timeout=5       # Add timeout
+        )
+        
+        # Check connection by getting server version
+        version = client.ping()
+        print(f"Connected to InfluxDB server: {version}")
+        
+        # Check if database exists, create if it doesn't
+        dbs = [db['name'] for db in client.get_list_database()]
+        print(f"Available databases: {dbs}")
+        
+        if INFLUX['database'] not in dbs:
+            print(f"Creating database '{INFLUX['database']}'...")
+            client.create_database(INFLUX['database'])
+        
+        # Switch to the specified database
+        client.switch_database(INFLUX['database'])
+        print(f"Using database: {INFLUX['database']}")
+        
+        # Check if we have any data
+        check_data_exists(client)
+        
+        return client
+        
+    except InfluxDBClientError as e:
+        print(f"InfluxDB client error: {e}")
+        return None
+    except InfluxDBServerError as e:
+        print(f"InfluxDB server error: {e}")
+        return None
+    except Exception as e:
+        print(f"Error connecting to InfluxDB: {e}")
+        traceback.print_exc()
+        return None
+
 # ───────── main loop ───────────────────────────────────────────────
 
 def main():
@@ -168,6 +207,8 @@ def main():
     last_loop = time.time()
     last_db_retry = time.time()
     db_retry_interval = 30  # seconds
+    last_data_check = time.time()
+    data_check_interval = 60  # Check for data in the database every 60 seconds
 
     print('Sensor Controller running… Ctrl-C to exit')
     try:
@@ -180,6 +221,13 @@ def main():
                 print("Attempting to reconnect to InfluxDB...")
                 cli = influx_client()
                 last_db_retry = now
+            
+            # Periodically check if data exists in database
+            if cli and (now - last_data_check) >= data_check_interval:
+                print("\nVerifying data in the database:")
+                check_data_exists(cli)
+                last_data_check = now
+                print() # Add a blank line for readability
 
             # Read temperature sensor
             try:
