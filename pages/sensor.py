@@ -18,7 +18,7 @@ DEVICE_ON = True  # Default to on
 
 # Temperature mode settings
 PID_TEMP = 22
-AUTOMATIC_TEMP = 20
+AUTOMATIC_TEMP = 22
 ACTIVE_MODE = "Automatic"  # Default mode changed from "Ručni" to "Automatic"
 
 # Control state variables (enabled/disabled)
@@ -361,10 +361,55 @@ else:
 # Define a unique ID for the fan speed output to avoid conflicts
 FAN_SPEED_OUTPUT_ID = 'fan-speed-output-v1'
 
-# Define the layout for just this page (without the navbar which is in app.py)
+# Define function to generate button styles based on active mode
+def get_mode_button_style(button_mode, active_mode):
+    """Generate appropriate button style based on whether this button is active"""
+    # Base colors for different mode buttons
+    button_colors = {
+        "PID": '#4CAF50',        # Green
+        "Ručni": '#FF9800',      # Orange
+        "Automatic": '#2196F3',  # Blue
+        "Low": '#81D4FA',        # Light Blue
+        "OFF": '#f44336'         # Red
+    }
+    
+    color = button_colors.get(button_mode, '#2196F3')  # Default to blue if mode not found
+    
+    # Base style for all buttons
+    style = {
+        'marginBottom': '10px', 
+        'width': '100%', 
+        'padding': '10px',
+        'backgroundColor': color, 
+        'color': 'white', 
+        'border': 'none',
+        'borderRadius': '4px', 
+        'cursor': 'pointer',
+        'transition': 'all 0.3s ease'  # Smooth transition for size changes
+    }
+    
+    # Make active button larger
+    if button_mode == active_mode:
+        style.update({
+            'transform': 'scale(1.1)',  # Make button 10% larger
+            'fontWeight': 'bold',
+            'boxShadow': '0px 0px 10px rgba(0,0,0,0.2)'  # Add shadow for emphasis
+        })
+    else:
+        style.update({
+            'transform': 'scale(0.95)',  # Make button slightly smaller
+            'opacity': '0.85'  # Slightly more transparent
+        })
+        
+    return style
+
+# Layout definition
 layout = html.Div([
     # Store component to track device state (on/off)
     dcc.Store(id='device-state', data={'on': DEVICE_ON}),
+    
+    # NEW: Add a store to track the active mode
+    dcc.Store(id='active-mode-store', data={'mode': ACTIVE_MODE}),
     
     # Add connection status message if there was an error
     html.Div([
@@ -447,44 +492,33 @@ layout = html.Div([
                     
                     # Right side: Mode buttons (unchanged)
                     html.Div([
-                        html.P("Temperature Mode:", style={'fontWeight': 'bold', 'marginBottom': '16px'}),
                         html.Div([
                             html.Button("PID", id="pid-mode-button", 
-                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
-                                              'backgroundColor': '#4CAF50', 'color': 'white', 'border': 'none',
-                                              'borderRadius': '4px', 'cursor': 'pointer'}),
+                                        style=get_mode_button_style("PID", ACTIVE_MODE)),
                             
                             html.Button("Ručni", id="Ručni-mode-button", 
-                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
-                                              'backgroundColor': '#FF9800', 'color': 'white', 'border': 'none',
-                                              'borderRadius': '4px', 'cursor': 'pointer'}),
+                                        style=get_mode_button_style("Ručni", ACTIVE_MODE)),
                             
                             html.Button("Automatic", id="automatic-mode-button", 
-                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
-                                              'backgroundColor': '#2196F3', 'color': 'white', 'border': 'none',
-                                              'borderRadius': '4px', 'cursor': 'pointer'}),
-                                              
+                                        style=get_mode_button_style("Automatic", ACTIVE_MODE)),
+                                                
                             html.Button("Low", id="low-mode-button", 
-                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
-                                              'backgroundColor': '#81D4FA', 'color': 'white', 'border': 'none',
-                                              'borderRadius': '4px', 'cursor': 'pointer'}),
-                                              
+                                        style=get_mode_button_style("Low", ACTIVE_MODE)),
+                                                
                             html.Button("OFF", id="off-mode-button", 
-                                        style={'width': '100%', 'padding': '10px',
-                                              'backgroundColor': '#f44336', 'color': 'white', 'border': 'none',
-                                              'borderRadius': '4px', 'cursor': 'pointer'})
+                                        style=get_mode_button_style("OFF", ACTIVE_MODE))
                         ]),
                         
                         html.Div([
                             html.P("Active Mode:", style={'marginTop': '15px', 'display': 'inline-block'}),
                             html.P(id="active-mode", children=ACTIVE_MODE, 
-                                  style={'marginTop': '15px', 'marginLeft': '5px', 'display': 'inline-block', 'fontWeight': 'bold'})
+                                   style={'marginTop': '15px', 'marginLeft': '5px', 'display': 'inline-block', 'fontWeight': 'bold'})
                         ])
                     ], style={'margin': '10px', 'padding': '15px', 'backgroundColor': '#f0f0f0', 'borderRadius': '10px', 
                               'width': '25%', 'display': 'inline-block', 'verticalAlign': 'top', 'textAlign': 'center'})
                 ], style={'display': 'flex', 'justifyContent': 'space-between'}),
                 
-                # Heater control panel - now below temperature gauge
+                # Control panel - moved PID parameters inside
                 html.Div([
                     html.P("Control:", style={'fontSize': '20px', 'fontWeight': 'bold', 'marginBottom': '15px'}),
                     html.Div([
@@ -540,30 +574,62 @@ layout = html.Div([
                                     }
                                 )
                             ], style={'textAlign': 'center'})
-                        ], style={'display': 'inline-block', 'marginRight': '60px', 'verticalAlign': 'top', 'width': '300px'}),
+                        ], id="temp-control-section", style={'display': 'inline-block', 'marginRight': '60px', 'verticalAlign': 'top', 'width': '300px'}),
                         
                         # Fan control slider - make it support disabled state
                         html.Div([
                             html.P("Fan Speed:", style={'fontSize': '16px', 'fontWeight': 'bold', 'marginBottom': '15px'}),
                             html.Div([
-                                dcc.Slider(
-                                    id='fan-speed-slider',
-                                    min=0,
-                                    max=100,
-                                    step=5,
-                                    value=fan_speed,
-                                    disabled=fan_control_disabled,  # Now uses dynamic disabled state
-                                    marks={
-                                        0: {'label': 'Off', 'style': {'color': '#77b0b1', 'fontSize': '14px'}},
-                                        25: {'label': '25%', 'style': {'fontSize': '14px'}},
-                                        50: {'label': '50%', 'style': {'fontSize': '14px'}},
-                                        75: {'label': '75%', 'style': {'fontSize': '14px'}},
-                                        100: {'label': 'Max', 'style': {'fontSize': '14px'}}
-                                    },
-                                    className='fan-slider',
-                                    tooltip={"placement": "bottom", "always_visible": True}
+                                # Replace slider with preset buttons
+                                html.Button(
+                                    "30%", 
+                                    id="fan-preset-30", 
+                                    disabled=fan_control_disabled,
+                                    style={
+                                        'width': '80px',
+                                        'height': '40px',
+                                        'margin': '0 10px',
+                                        'fontSize': '16px',
+                                        'backgroundColor': '#81D4FA',
+                                        'color': 'white',
+                                        'border': 'none',
+                                        'borderRadius': '4px',
+                                        'cursor': 'pointer'
+                                    }
                                 ),
-                            ], style={'width': '350px', 'margin': '0 auto'}),
+                                html.Button(
+                                    "65%", 
+                                    id="fan-preset-65", 
+                                    disabled=fan_control_disabled,
+                                    style={
+                                        'width': '80px',
+                                        'height': '40px',
+                                        'margin': '0 10px',
+                                        'fontSize': '16px',
+                                        'backgroundColor': '#4FC3F7',
+                                        'color': 'white',
+                                        'border': 'none',
+                                        'borderRadius': '4px',
+                                        'cursor': 'pointer'
+                                    }
+                                ),
+                                html.Button(
+                                    "100%", 
+                                    id="fan-preset-100", 
+                                    disabled=fan_control_disabled,
+                                    style={
+                                        'width': '80px',
+                                        'height': '40px',
+                                        'margin': '0 10px',
+                                        'fontSize': '16px',
+                                        'backgroundColor': '#29B6F6',
+                                        'color': 'white',
+                                        'border': 'none',
+                                        'borderRadius': '4px',
+                                        'cursor': 'pointer'
+                                    }
+                                ),
+                            ], style={'display': 'flex', 'justifyContent': 'center', 'marginBottom': '15px'}),
                             html.Div(
                                 id=FAN_SPEED_OUTPUT_ID,  # Using the new unique ID
                                 children=f'Current: {fan_speed}%', 
@@ -574,12 +640,172 @@ layout = html.Div([
                                     'color': 'purple'
                                 }
                             )
-                        ], style={'display': 'inline-block', 'width': '400px', 'verticalAlign': 'top'})
-
+                        ], id="fan-control-section", style={'display': 'inline-block', 'width': '400px', 'verticalAlign': 'top'}),
+                        
+                        # PID parameters section - moved inside
+                        html.Div([
+                            html.P("PID Parameters:", style={'fontSize': '16px', 'fontWeight': 'bold', 'marginBottom': '15px'}),
+                            html.Div([
+                                html.Div([
+                                    html.P("P:", style={'width': '30px', 'marginRight': '5px'}),
+                                    dcc.Input(
+                                        id="pid-p-input",
+                                        type="number",
+                                        value=9.0,
+                                        min=0,
+                                        max=10,
+                                        step=0.1,
+                                        style={
+                                            'width': '80px', 
+                                            'height': '35px', 
+                                            'fontSize': '16px', 
+                                            'textAlign': 'center',
+                                            'borderRadius': '4px',
+                                            'border': '2px solid #2196F3'
+                                        }
+                                    )
+                                ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '15px'}),
+                                
+                                html.Div([
+                                    html.P("I:", style={'width': '30px', 'marginRight': '5px'}),
+                                    dcc.Input(
+                                        id="pid-i-input",
+                                        type="number",
+                                        value=0.1,
+                                        min=0,
+                                        max=1,
+                                        step=0.01,
+                                        style={
+                                            'width': '80px', 
+                                            'height': '35px', 
+                                            'fontSize': '16px', 
+                                            'textAlign': 'center',
+                                            'borderRadius': '4px',
+                                            'border': '2px solid #2196F3'
+                                        }
+                                    )
+                                ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '15px'}),
+                                
+                                html.Div([
+                                    html.P("D:", style={'width': '30px', 'marginRight': '5px'}),
+                                    dcc.Input(
+                                        id="pid-d-input",
+                                        type="number",
+                                        value=0.05,
+                                        min=0,
+                                        max=1,
+                                        step=0.01,
+                                        style={
+                                            'width': '80px', 
+                                            'height': '35px', 
+                                            'fontSize': '16px', 
+                                            'textAlign': 'center',
+                                            'borderRadius': '4px',
+                                            'border': '2px solid #2196F3'
+                                        }
+                                    )
+                                ], style={'display': 'flex', 'alignItems': 'center'}),
+                            ], style={'display': 'flex', 'justifyContent': 'center', 'marginBottom': '10px'}),
+                            html.Button(
+                                "Apply PID Parameters", 
+                                id="apply-pid-button",
+                                style={
+                                    'marginTop': '10px',
+                                    'height': '40px',
+                                    'padding': '0 15px',
+                                    'fontSize': '16px',
+                                    'backgroundColor': '#2196F3',
+                                    'color': 'white',
+                                    'border': 'none',
+                                    'borderRadius': '4px',
+                                    'cursor': 'pointer'
+                                }
+                            )
+                        ], id="pid-control-section", style={'display': 'none', 'width': '100%', 'marginTop': '20px'})
                     ], style={'display': 'flex', 'justifyContent': 'center', 'alignItems': 'flex-start', 'flexWrap': 'wrap'})
                 ], id="control-panel", style={'margin': '10px', 'marginTop': '20px', 'padding': '20px', 
                                               'backgroundColor': '#f0f0f0', 'borderRadius': '10px', 
-                                              'textAlign': 'center', 'display': 'none'})  # Added display: none
+                                              'textAlign': 'center'}),
+                
+                html.Div([
+                    html.P("PID Parameters:", style={'fontSize': '16px', 'fontWeight': 'bold', 'marginBottom': '15px'}),
+                    html.Div([
+                        html.Div([
+                            html.P("P:", style={'width': '30px', 'marginRight': '5px'}),
+                            dcc.Input(
+                                id="pid-p-input",
+                                type="number",
+                                value=1.0,
+                                min=0,
+                                max=10,
+                                step=0.1,
+                                style={
+                                    'width': '80px', 
+                                    'height': '35px', 
+                                    'fontSize': '16px', 
+                                    'textAlign': 'center',
+                                    'borderRadius': '4px',
+                                    'border': '2px solid #2196F3'
+                                }
+                            )
+                        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '15px'}),
+                        
+                        html.Div([
+                            html.P("I:", style={'width': '30px', 'marginRight': '5px'}),
+                            dcc.Input(
+                                id="pid-i-input",
+                                type="number",
+                                value=0.1,
+                                min=0,
+                                max=1,
+                                step=0.01,
+                                style={
+                                    'width': '80px', 
+                                    'height': '35px', 
+                                    'fontSize': '16px', 
+                                    'textAlign': 'center',
+                                    'borderRadius': '4px',
+                                    'border': '2px solid #2196F3'
+                                }
+                            )
+                        ], style={'display': 'flex', 'alignItems': 'center', 'marginRight': '15px'}),
+                        
+                        html.Div([
+                            html.P("D:", style={'width': '30px', 'marginRight': '5px'}),
+                            dcc.Input(
+                                id="pid-d-input",
+                                type="number",
+                                value=0.05,
+                                min=0,
+                                max=1,
+                                step=0.01,
+                                style={
+                                    'width': '80px', 
+                                    'height': '35px', 
+                                    'fontSize': '16px', 
+                                    'textAlign': 'center',
+                                    'borderRadius': '4px',
+                                    'border': '2px solid #2196F3'
+                                }
+                            )
+                        ], style={'display': 'flex', 'alignItems': 'center'}),
+                    ], style={'display': 'flex', 'justifyContent': 'center', 'marginBottom': '10px'}),
+                    html.Button(
+                        "Apply PID Parameters", 
+                        id="apply-pid-button",
+                        style={
+                            'marginTop': '10px',
+                            'height': '40px',
+                            'padding': '0 15px',
+                            'fontSize': '16px',
+                            'backgroundColor': '#2196F3',
+                            'color': 'white',
+                            'border': 'none',
+                            'borderRadius': '4px',
+                            'cursor': 'pointer'
+                        }
+                    )
+                ], id="pid-control-section", style={'display': 'none'})
             ])
         ], style={'margin': '20px', 'padding': '15px', 'backgroundColor': '#f9f9f9', 'borderRadius': '10px'}),
         
@@ -662,10 +888,15 @@ layout = html.Div([
      Output('movement-status', 'style'),
      Output('movement-status-text', 'children'),
      Output('window-status', 'style'),
-     Output('window-status-text', 'children')],
-    [Input('interval-component', 'n_intervals')]
+     Output('window-status-text', 'children'),
+     # NEW: Add output for the mode store
+     Output('active-mode-store', 'data', allow_duplicate=True)],
+    [Input('interval-component', 'n_intervals')],
+    # NEW: Add state to get current mode
+    [State('active-mode-store', 'data')],
+    prevent_initial_call=True
 )
-def update_current_temp(n):
+def update_current_temp(n, current_mode_data):
     global ACTIVE_MODE, temp_control_disabled, fan_control_disabled
     
     # Store previous sensor states to detect changes
@@ -693,7 +924,6 @@ def update_current_temp(n):
                      is_movement != prev_movement_state)
     
     # Comprehensive mode selection logic with prioritization
-    # Following the same priority rules as in prvisamjojkosemrsio.py
     old_mode = ACTIVE_MODE
     
     # Determine the appropriate mode based on current sensor states
@@ -712,14 +942,15 @@ def update_current_temp(n):
             # Keep current mode if already in a higher priority mode
             new_mode = ACTIVE_MODE
     else:
-        # No movement, no window open - consider energy saving
-        if ACTIVE_MODE == "Automatic":
-            # Only switch to Low mode if coming from Automatic
-            # Don't change PID, MANUAL, or other modes
+        # No movement, no window open - consider energy saving with Low mode
+        # CHANGED: Set Low mode when both sensors are off, regardless of current mode
+        # (except for manual modes that should not be overridden)
+        if ACTIVE_MODE != "PID" and ACTIVE_MODE != "Ručni":
             new_mode = "Low"
-            print("SENSOR CHANGE: No movement - switching to Low energy mode")
+            if ACTIVE_MODE != "Low":
+                print("SENSOR CHANGE: Both sensors off - switching to Low energy mode")
         else:
-            # Keep current mode
+            # Keep current mode for manual modes
             new_mode = ACTIVE_MODE
             
     # Special case: Don't override MANUAL or PID modes with automatic changes
@@ -728,8 +959,10 @@ def update_current_temp(n):
         new_mode = ACTIVE_MODE
     
     # Update the mode if changed
+    mode_changed = False
     if new_mode != ACTIVE_MODE:
         ACTIVE_MODE = new_mode
+        mode_changed = True
         print(f"Mode changed from {old_mode} to {ACTIVE_MODE}")
         
         # Update control states based on the new mode
@@ -745,6 +978,23 @@ def update_current_temp(n):
         elif ACTIVE_MODE == "Low":
             temp_control_disabled = True
             fan_control_disabled = True
+            
+            # ADDED: Immediately set fan speed to 10% when entering Low mode
+            global fan_speed
+            if fan_speed != 10:
+                fan_speed = 10
+                # Update fan history
+                current_time = datetime.now().strftime('%H:%M:%S')
+                fan_history['time'].append(current_time)
+                fan_history['speed'].append(fan_speed)
+                
+                # Keep only recent history
+                if len(fan_history['time']) > MAX_DATA_POINTS:
+                    fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+                    fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+                
+                print(f"Low mode: Fan speed set to {fan_speed}%")
+                
         elif ACTIVE_MODE == "OFF":
             temp_control_disabled = True
             fan_control_disabled = True
@@ -799,7 +1049,11 @@ def update_current_temp(n):
         if sensor_changed:
             log_parameters_to_influxdb()
         
-        return heater_style, heater_text, movement_style, movement_text, window_style, window_text
+        # Add the return value for mode store
+        if mode_changed:
+            return heater_style, heater_text, movement_style, movement_text, window_style, window_text, {'mode': ACTIVE_MODE}
+        else:
+            return heater_style, heater_text, movement_style, movement_text, window_style, window_text, dash.no_update
     
     # Default values if no temperature data
     default_style = {'height': '25px', 'width': '25px', 'borderRadius': '50%', 'backgroundColor': SENSOR_OFF_COLOR, 'display': 'inline-block', 'margin': '0 10px', 'verticalAlign': 'middle'}
@@ -871,34 +1125,65 @@ def update_temp_gauge(n):
 @callback(
     [Output('fan-gauge', 'figure'),
      Output(FAN_SPEED_OUTPUT_ID, 'children')],
-    [Input('fan-speed-slider', 'value'),
+    [Input('fan-preset-30', 'n_clicks'),
+     Input('fan-preset-65', 'n_clicks'),
+     Input('fan-preset-100', 'n_clicks'),
      Input('interval-component', 'n_intervals')],
     prevent_initial_call=False
 )
-def update_fan_display(slider_value, n_intervals):
-    """Update fan speed display and gauge when slider changes or on interval update"""
+def update_fan_display(preset_30_clicks, preset_65_clicks, preset_100_clicks, n_intervals):
+    """Update fan speed display and gauge when preset buttons are clicked or on interval update"""
     global fan_speed
     
     # Check context to see what triggered this callback
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     
-    # If slider changed, update the global fan speed
-    if trigger_id == 'fan-speed-slider' and slider_value is not None:
-        fan_speed = slider_value
-        
+    # If a preset button was clicked, update the global fan speed
+    if trigger_id == 'fan-preset-30':
+        fan_speed = 30
         # Update fan history
         current_time = datetime.now().strftime('%H:%M:%S')
         fan_history['time'].append(current_time)
-        fan_history['speed'].append(slider_value)
+        fan_history['speed'].append(fan_speed)
         
         # Keep only recent history
         if len(fan_history['time']) > MAX_DATA_POINTS:
             fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
             fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
         
-        # Store this fan speed for local use (since we can't save it in the database)
         print(f"Fan speed updated to: {fan_speed}%")
+        log_fan_speed_to_influxdb(fan_speed)  # Log to separate table
+    
+    elif trigger_id == 'fan-preset-65':
+        fan_speed = 65
+        # Update fan history
+        current_time = datetime.now().strftime('%H:%M:%S')
+        fan_history['time'].append(current_time)
+        fan_history['speed'].append(fan_speed)
+        
+        # Keep only recent history
+        if len(fan_history['time']) > MAX_DATA_POINTS:
+            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
+        print(f"Fan speed updated to: {fan_speed}%")
+        log_fan_speed_to_influxdb(fan_speed)  # Log to separate table
+    
+    elif trigger_id == 'fan-preset-100':
+        fan_speed = 100
+        # Update fan history
+        current_time = datetime.now().strftime('%H:%M:%S')
+        fan_history['time'].append(current_time)
+        fan_history['speed'].append(fan_speed)
+        
+        # Keep only recent history
+        if len(fan_history['time']) > MAX_DATA_POINTS:
+            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
+        print(f"Fan speed updated to: {fan_speed}%")
+        log_fan_speed_to_influxdb(fan_speed)  # Log to separate table
     
     # If this is an interval update, calculate the fan speed based on mode
     elif trigger_id == 'interval-component':
@@ -910,14 +1195,15 @@ def update_fan_display(slider_value, n_intervals):
                 target_temperature,
                 window_open,
                 ACTIVE_MODE,
-                fan_speed
+                fan_speed # Pass current fan speed for Ručni mode
             )
             
             # Only update if the calculated speed is different
             if calculated_speed != fan_speed:
+                previous_speed = fan_speed
                 fan_speed = calculated_speed
                 
-                # Update fan history for significant changes (more than 5%)
+                # Update fan history for significant changes
                 current_time = datetime.now().strftime('%H:%M:%S')
                 fan_history['time'].append(current_time)
                 fan_history['speed'].append(fan_speed)
@@ -928,37 +1214,49 @@ def update_fan_display(slider_value, n_intervals):
                     fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
                 
                 print(f"Fan speed auto-updated to: {fan_speed}%")
-    
+                
+                # Add direct logging when fan speed changes automatically
+                log_fan_speed_to_influxdb(fan_speed)
+                print(f"Logged fan speed change from {previous_speed}% to {fan_speed}%")
+
+    # Determine bar color based on speed
+    if fan_speed < 33:
+        bar_color = '#81D4FA' # Light Blue
+    elif fan_speed < 66:
+        bar_color = '#4FC3F7' # Medium Blue
+    else:
+        bar_color = '#29B6F6' # Darker Blue
+
     # Create the gauge figure for fan speed
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=fan_speed,
         domain={'x': [0, 1], 'y': [0, 1]},
-        title={},
+        title={}, # Removed title
         number={'suffix': "%", 'font': {'size': 26}},
         gauge={
             'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "gray"},
-            'bar': {'color': 'purple'},
+            'bar': {'color': bar_color}, # Use dynamic color
             'bgcolor': "white",
             'borderwidth': 2,
             'bordercolor': "gray",
             'steps': [
-                {'range': [0, 25], 'color': 'rgba(128, 0, 128, 0.1)'},
-                {'range': [25, 50], 'color': 'rgba(128, 0, 128, 0.2)'},
-                {'range': [50, 75], 'color': 'rgba(128, 0, 128, 0.3)'},
-                {'range': [75, 100], 'color': 'rgba(128, 0, 128, 0.4)'}
+                {'range': [0, 33], 'color': 'rgba(129, 212, 250, 0.2)'}, # Light Blue background step
+                {'range': [33, 66], 'color': 'rgba(79, 195, 247, 0.2)'}, # Medium Blue background step
+                {'range': [66, 100], 'color': 'rgba(41, 182, 246, 0.2)'} # Darker Blue background step
             ]
+            # Removed threshold as it's not relevant for fan speed
         }
     ))
     
-    # Format the gauge layout
+    # Remove margins and make it compact
     fig.update_layout(
         margin=dict(l=10, r=10, t=30, b=10),
         height=200,
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)'
+        paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
+        plot_bgcolor='rgba(0,0,0,0)'    # Transparent plot area
     )
-    
+
     # Create text display
     fan_text = f'Current: {fan_speed}%'
     
@@ -1234,7 +1532,7 @@ def update_sensors_graph(n, x_range_data, device_state):
             line=dict(color='green', width=2),
             fill='tozeroy'
         ))
-    
+        
     fig.update_layout(
         title="Sensor States",
         xaxis_title='Time',
@@ -1247,11 +1545,11 @@ def update_sensors_graph(n, x_range_data, device_state):
         height=350,
         legend=dict(orientation="h", y=-0.2)
     )
-    
+        
     # Apply synchronized range if available
     if x_range_data and 'range' in x_range_data:
         fig.update_layout(xaxis=dict(range=x_range_data['range']))
-    
+
     return fig
 
 # Add callback for graph relayouts (zoom/pan) to synchronize ranges
@@ -1379,27 +1677,39 @@ def toggle_device(n_clicks, current_state):
     
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
 
-# New function to log all parameters to InfluxDB - updated to work with pi table
+# New function to log fan speed to a separate InfluxDB table
+def log_fan_speed_to_influxdb(fan_speed_value):
+    """Log fan speed to a separate InfluxDB table"""
+    if client and not USE_RANDOM_DATA:
+        try:
+            current_time = datetime.now()
+            
+            # Create a new fan_speed measurement (table)
+            points = [
+                {
+                    'measurement': 'fan_speed',  # Different table than 'pi'
+                    'time': current_time,
+                    'fields': {
+                        'speed': int(fan_speed_value),
+                        'mode': ACTIVE_MODE  # Also log the mode that set this fan speed
+                    }
+                }
+            ]
+            
+            # Write points to InfluxDB
+            client.write_points(points)
+            print(f"Successfully logged fan speed {fan_speed_value}% to fan_speed table at {current_time}")
+        except Exception as e:
+            print(f"Error logging fan speed to InfluxDB: {e}")
+
+# Modify the original logging function to call the new fan speed logging function
 def log_parameters_to_influxdb():
     """Log all current parameters to InfluxDB"""
     if client and not USE_RANDOM_DATA:
         try:
             current_time = datetime.now()
             
-            # Calculate appropriate fan speed based on mode and temperature
-            current_fan_speed = calculate_dynamic_fan_speed(
-                temp_data['temperature'][-1] if temp_data['temperature'] else 22.0,
-                target_temperature,
-                window_open,
-                ACTIVE_MODE,
-                fan_speed
-            )
-            
-            # Log the calculated fan speed locally even if we can't store it in DB
-            if current_fan_speed != fan_speed:
-                print(f"Fan speed calculated: {current_fan_speed}% (not stored in DB)")
-            
-            # Prepare data to log - using pi table structure (pi table doesn't have fan speed)
+            # Prepare data to log - using pi table structure
             points = [
                 {
                     'measurement': 'pi',
@@ -1415,10 +1725,14 @@ def log_parameters_to_influxdb():
             # Write points to InfluxDB
             client.write_points(points)
             print(f"Successfully logged parameters to pi table at {current_time}")
+            
+            # Additionally log fan speed to separate table
+            log_fan_speed_to_influxdb(fan_speed)
+            
         except Exception as e:
             print(f"Error logging parameters to InfluxDB: {e}")
 
-# New function to calculate fan speed based on mode and conditions
+# Updated function to calculate fan speed based on mode and conditions
 def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, current_mode, current_fan):
     """Calculate appropriate fan speed based on mode and conditions"""
     
@@ -1430,6 +1744,7 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
     if current_mode == "OFF":
         return 0
     elif current_mode == "Low":
+        # CHANGED: Low mode always sets fan speed to 10% regardless of temperature
         return 10  # Low constant speed (10%)
     elif current_mode == "Ručni":
         return current_fan  # Use user-set fan speed
@@ -1442,19 +1757,15 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
         # Simple 3-level fan control based on temperature difference
         delta = abs(current_temp - target_temp)
         if delta <= 2:
-            return 25  # Low speed
+            return 30  # Low speed
         elif delta <= 5:
-            return 60  # Medium speed
+            return 65  # Medium speed
         else:
             return 100  # High speed
 
-# Mode buttons callback - handles all mode buttons including Low and OFF
+# Callback to handle mode button clicks
 @callback(
-    [Output('active-mode', 'children'),
-     Output('target-temp-input', 'disabled'),
-     Output('set-temp-button', 'disabled'),
-     Output('fan-speed-slider', 'disabled'),
-     Output('control-panel', 'style')],
+    Output('active-mode-store', 'data', allow_duplicate=True),
     [Input('pid-mode-button', 'n_clicks'),
      Input('Ručni-mode-button', 'n_clicks'),
      Input('automatic-mode-button', 'n_clicks'),
@@ -1462,57 +1773,133 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
      Input('off-mode-button', 'n_clicks')],
     prevent_initial_call=True
 )
-def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_clicks, off_clicks):
-    global ACTIVE_MODE, temp_control_disabled, fan_control_disabled, target_temperature, fan_speed
+def update_active_mode(pid_clicks, rucni_clicks, auto_clicks, low_clicks, off_clicks):
+    global ACTIVE_MODE, target_temperature, PID_TEMP, AUTOMATIC_TEMP
     
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+        
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    old_mode = ACTIVE_MODE
+    new_mode = ACTIVE_MODE # Default to current mode
+    
+    if button_id == 'pid-mode-button':
+        new_mode = "PID"
+        target_temperature = PID_TEMP # Set target temp for PID
+    elif button_id == 'Ručni-mode-button':
+        new_mode = "Ručni"
+        # Keep current target temp or set a default if needed
+    elif button_id == 'automatic-mode-button':
+        new_mode = "Automatic"
+        target_temperature = AUTOMATIC_TEMP # Set target temp for Automatic
+    elif button_id == 'low-mode-button':
+        new_mode = "Low"
+        # Target temp is less relevant in Low mode
+    elif button_id == 'off-mode-button':
+        new_mode = "OFF"
+        # Target temp is irrelevant in OFF mode
+
+    if new_mode != old_mode:
+        ACTIVE_MODE = new_mode
+        print(f"Mode manually changed from {old_mode} to {ACTIVE_MODE}")
+        
+        # Log the change to InfluxDB
+        log_parameters_to_influxdb()
+        
+        # Update the store to trigger UI updates
+        return {'mode': ACTIVE_MODE}
+        
+    return dash.no_update
+
+# Add new callback to update UI when mode changes
+@callback(
+    [Output('active-mode', 'children'),
+     Output('target-temp-input', 'disabled'),
+     Output('set-temp-button', 'disabled'),
+     Output('fan-preset-30', 'disabled'),
+     Output('fan-preset-65', 'disabled'),
+     Output('fan-preset-100', 'disabled'),
+     Output('control-panel', 'style'),
+     Output('pid-mode-button', 'style'),
+     Output('Ručni-mode-button', 'style'),
+     Output('automatic-mode-button', 'style'),
+     Output('low-mode-button', 'style'),
+     Output('off-mode-button', 'style'),
+     Output('temp-control-section', 'style'),
+     Output('fan-control-section', 'style'),
+     Output('pid-control-section', 'style'),
+     # Add output for current target temperature display
+     Output('current-target-temp', 'children')],
+    [Input('active-mode-store', 'data')],
+    # Add state for target temperature input value
+    [State('target-temp-input', 'value')],
+    prevent_initial_call=True # Prevent initial call to avoid conflicts
+)
+def update_ui_from_mode(mode_data, current_input_target_temp):
+    global temp_control_disabled, fan_control_disabled, target_temperature, fan_speed, ACTIVE_MODE
+    
+    # Get the current mode from the store or global variable
+    current_mode = mode_data.get('mode', ACTIVE_MODE)
+    
+    # Update global ACTIVE_MODE if it differs from store (ensures consistency)
+    if ACTIVE_MODE != current_mode:
+        ACTIVE_MODE = current_mode
+        print(f"UI Sync: Mode updated to {ACTIVE_MODE}")
+
     # Default control panel style
     control_panel_style = {
         'margin': '10px', 
         'marginTop': '20px', 
-        'padding': '20px', 
+        'padding': '20px',
         'backgroundColor': '#f0f0f0', 
         'borderRadius': '10px', 
         'textAlign': 'center',
-        'display': 'block'  # Make sure the control panel is visible by default
+        'display': 'block' # Default to visible
     }
     
-    # Determine which button was clicked
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        # No button clicked yet, return current state
-        return ACTIVE_MODE, temp_control_disabled, temp_control_disabled, fan_control_disabled, control_panel_style
-    
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    old_mode = ACTIVE_MODE
-    
-    # Set modes and disabled states based on button clicked
-    if button_id == "pid-mode-button":
-        ACTIVE_MODE = "PID"
-        target_temperature = PID_TEMP
+    # Default section styles (will be overridden based on mode)
+    temp_section_style = {'display': 'inline-block', 'marginRight': '60px', 'verticalAlign': 'top', 'width': '300px'}
+    fan_section_style = {'display': 'inline-block', 'width': '400px', 'verticalAlign': 'top'}
+    pid_section_style = {'display': 'none', 'width': '100%', 'marginTop': '20px'} # PID controls hidden by default
+
+    # Set control states and styles based on current mode
+    if current_mode == "PID":
         temp_control_disabled = False
         fan_control_disabled = True
-    
-    elif button_id == "automatic-mode-button":
-        ACTIVE_MODE = "Automatic"
-        target_temperature = AUTOMATIC_TEMP
+        # Use the value from the input field if available, otherwise global
+        target_temperature = current_input_target_temp if current_input_target_temp is not None else PID_TEMP
+        temp_section_style['display'] = 'inline-block'
+        fan_section_style['display'] = 'none'
+        pid_section_style['display'] = 'block' # Show PID controls
+        
+    elif current_mode == "Automatic":
+        target_temperature = AUTOMATIC_TEMP # Use predefined automatic temp
         temp_control_disabled = True
         fan_control_disabled = True
-    
-    elif button_id == "Ručni-mode-button":
-        ACTIVE_MODE = "Ručni"
-        # Keep current target temperature
-        temp_control_disabled = True
-        fan_control_disabled = False
+        temp_section_style['display'] = 'inline-block' # Show temp display (disabled)
+        fan_section_style['display'] = 'none'
+        pid_section_style['display'] = 'none'
         
-    elif button_id == "low-mode-button":
-        ACTIVE_MODE = "Low"
+    elif current_mode == "Ručni":
+        # Keep the last set target temperature, but disable controls
+        target_temperature = current_input_target_temp if current_input_target_temp is not None else target_temperature
+        temp_control_disabled = True
+        fan_control_disabled = False # Enable fan controls
+        temp_section_style['display'] = 'none' # Hide temp controls
+        fan_section_style['display'] = 'inline-block' # Show fan controls
+        pid_section_style['display'] = 'none'
+        
+    elif current_mode == "Low":
+        # Keep the last set target temperature, but disable controls
+        target_temperature = current_input_target_temp if current_input_target_temp is not None else target_temperature
         temp_control_disabled = True
         fan_control_disabled = True
+        control_panel_style['display'] = 'none' # Hide the entire control panel
         
-        # For Low mode, set fan speed immediately
-        if old_mode != "Low":
-            fan_speed = 10  # Low constant speed (10%)
-            
+        # For Low mode, set fan speed immediately to 10%
+        if fan_speed != 10:
+            fan_speed = 10
             # Update fan history
             current_time = datetime.now().strftime('%H:%M:%S')
             fan_history['time'].append(current_time)
@@ -1522,28 +1909,53 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_cli
             if len(fan_history['time']) > MAX_DATA_POINTS:
                 fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
                 fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+            print(f"Low mode entered: Fan speed set to {fan_speed}%")
         
-    elif button_id == "off-mode-button":
-        ACTIVE_MODE = "OFF"
+    elif current_mode == "OFF":
+        # Keep the last set target temperature, but disable controls
+        target_temperature = current_input_target_temp if current_input_target_temp is not None else target_temperature
         temp_control_disabled = True
         fan_control_disabled = True
-        # Hide control panel in OFF mode
-        control_panel_style['display'] = 'none'
-        
-        # For OFF mode, set fan speed to 0 immediately
-        fan_speed = 0
-        
-        # Update fan history
-        current_time = datetime.now().strftime('%H:%M:%S')
-        fan_history['time'].append(current_time)
-        fan_history['speed'].append(fan_speed)
-        
-        # Keep only recent history
-        if len(fan_history['time']) > MAX_DATA_POINTS:
-            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
-            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        control_panel_style['display'] = 'none' # Hide the entire control panel
     
-    # Log the mode change to InfluxDB
-    log_parameters_to_influxdb()
+    # Generate updated button styles based on the *actual* current mode
+    button_styles = {
+        "PID": get_mode_button_style("PID", current_mode),
+        "Ručni": get_mode_button_style("Ručni", current_mode),
+        "Automatic": get_mode_button_style("Automatic", current_mode),
+        "Low": get_mode_button_style("Low", current_mode),
+        "OFF": get_mode_button_style("OFF", current_mode)
+    }
     
-    return ACTIVE_MODE, temp_control_disabled, temp_control_disabled, fan_control_disabled, control_panel_style
+    # Format the target temperature display string
+    target_temp_display = f"{target_temperature} °C"
+
+    return (current_mode, temp_control_disabled, temp_control_disabled, 
+            fan_control_disabled, fan_control_disabled, fan_control_disabled, 
+            control_panel_style, button_styles["PID"], button_styles["Ručni"], 
+            button_styles["Automatic"], button_styles["Low"], button_styles["OFF"],
+            temp_section_style, fan_section_style, pid_section_style,
+            target_temp_display) # Return the updated target temp display
+
+# Callback for setting target temperature (only enabled in PID mode)
+@callback(
+    Output('current-target-temp', 'children', allow_duplicate=True),
+    [Input('set-temp-button', 'n_clicks')],
+    [State('target-temp-input', 'value')],
+    prevent_initial_call=True
+)
+def set_target_temperature(n_clicks, new_target):
+    global target_temperature
+    if n_clicks is None or new_target is None:
+        return dash.no_update
+        
+    # Only update if in PID mode (although button should be disabled otherwise)
+    if ACTIVE_MODE == "PID":
+        target_temperature = new_target
+        print(f"Target temperature set to: {target_temperature}°C")
+        # Log the change
+        log_parameters_to_influxdb()
+        return f"{target_temperature} °C"
+    
+    return dash.no_update # Should not happen if UI is correct
+

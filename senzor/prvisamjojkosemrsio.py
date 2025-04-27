@@ -4,12 +4,15 @@ Raspberry Pi Sensor Controller
 =======================================
 
 This script reads sensor data and sends it to the database.
-It focuses solely on data acquisition, not control logic.
+It also reads fan speed data from the database and controls LEDs.
 
 Sensors:
 - Temperature (DS18B20)
 - Window state (switch)
 - Mode state (switch)
+
+LEDs:
+- Three LEDs to indicate fan speed (pins 17, 27, 22)
 """
 from __future__ import annotations
 import glob, os, time
@@ -19,6 +22,11 @@ from influxdb import InfluxDBClient
 
 # ───────── pinout & constants ───────────────────────────────────────
 PIN_SW1, PIN_SW2 = 23, 24
+
+# LED pins for fan speed indication
+LED_PIN_1 = 17  # LED for low speed (≤30%)
+LED_PIN_2 = 27  # LED for medium speed (31-60%)
+LED_PIN_3 = 22  # LED for high speed (>60%)
 
 LOG_INTERVAL = 2.5  # s - 1 second regular updates
 CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
@@ -51,6 +59,12 @@ def read_temp(file: str) -> float | None:
 def setup_gpio():
     GPIO.setmode(GPIO.BCM)
     GPIO.setup([PIN_SW1, PIN_SW2], GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    
+    # Set up LED pins as outputs
+    GPIO.setup([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.OUT)
+    # Initialize all LEDs to off
+    GPIO.output([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.LOW)
+    
     return None
 
 # ───────── data structures ──────────────────────────────────────────
@@ -110,6 +124,39 @@ def check_connection(cli):
     except Exception:
         return False
 
+def get_latest_fan_speed(cli) -> int:
+    """Get the latest fan speed from the fan_speed table"""
+    try:
+        # Query to get the most recent fan speed record
+        result = cli.query('SELECT last(speed) FROM fan_speed')
+        points = list(result.get_points())
+        
+        if points and 'last' in points[0]:
+            return int(points[0]['last'])
+        return 0  # Default to 0 if no data
+    except Exception as e:
+        print(f"Error getting fan speed: {e}")
+        return 0
+
+def update_leds_for_fan_speed(speed: int):
+    """Update LED states based on fan speed value"""
+    # Turn all LEDs off first
+    GPIO.output([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.LOW)
+    
+    # Set appropriate LED based on speed
+    if speed <= 30:
+        # Low speed: only first LED on
+        GPIO.output(LED_PIN_1, GPIO.HIGH)
+        print(f"Fan Speed: {speed}% - Low (LED 1 ON)")
+    elif speed <= 60:
+        # Medium speed: second LED on
+        GPIO.output(LED_PIN_2, GPIO.HIGH)
+        print(f"Fan Speed: {speed}% - Medium (LED 2 ON)")
+    else:
+        # High speed: third LED on
+        GPIO.output(LED_PIN_3, GPIO.HIGH)
+        print(f"Fan Speed: {speed}% - High (LED 3 ON)")
+
 # ───────── main loop ───────────────────────────────────────────────
 
 def main():
@@ -120,8 +167,10 @@ def main():
     # Track previous sensor states to detect changes
     prev_window_state = False
     prev_auto_mode = True
+    prev_fan_speed = -1  # Initialize to impossible value to force initial update
     
     last_loop = time.time()
+    last_fan_check = time.time() - 5  # Check fan speed immediately on startup
     write_counter = 0  # Track successful writes
     
     print('Sensor Controller running… Ctrl-C to exit')
@@ -143,6 +192,15 @@ def main():
             # Check for sensor changes that should be logged immediately
             sensor_changed = (sw.window_open != prev_window_state or 
                              sw.auto_mode != prev_auto_mode)
+
+            # Check fan speed every 2 seconds
+            if now - last_fan_check >= 2.0:
+                # Get latest fan speed and update LEDs
+                fan_speed = get_latest_fan_speed(cli)
+                if fan_speed != prev_fan_speed:
+                    update_leds_for_fan_speed(fan_speed)
+                    prev_fan_speed = fan_speed
+                last_fan_check = now
 
             # Only write once per loop iteration
             write_success = False
@@ -211,6 +269,8 @@ def main():
     except KeyboardInterrupt:
         print('\nBye')
     finally:
+        # Make sure to turn off all LEDs when exiting
+        GPIO.output([LED_PIN_1, LED_PIN_2, LED_PIN_3], GPIO.LOW)
         GPIO.cleanup()
 
 if __name__ == '__main__':
