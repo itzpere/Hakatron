@@ -1046,7 +1046,7 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                         use_random = True  # Fall back to random if no valid data
             else:
                 use_random = True  # No results, fall back to random
-                
+            
             # Query historical fan speed data (ac_intensity in database)
             fan_query = 'SELECT ac_intensity FROM environment WHERE time > now() - 1h'
             fan_result = client.query(fan_query)
@@ -1095,8 +1095,8 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
             print(f"Error querying historical data: {e}")
             use_random = True  # Fall back to random on error
     
-    # Generate random data if needed
-    if use_random and len(temp_data['time']) < 2:  # Only generate if we don't have enough data
+    # Generate random data if needed - FIXED: Always generate a new data point when using random data
+    if use_random:  # Removed the condition len(temp_data['time']) < 2
         current_time = datetime.now().strftime('%H:%M:%S')
         # Generate a somewhat realistic temperature value
         if not temp_data['temperature']:

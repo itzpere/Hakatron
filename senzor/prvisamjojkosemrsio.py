@@ -26,7 +26,7 @@ CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 INFLUX = {
     'host': 'localhost', 'port': 8086,
     'username': 'admin', 'password': 'mia',
-    'database': 'mydb',  'measurement': 'environment',
+    'database': 'mydb',  'measurement': 'pi',
 }
 
 # ───────── DS18B20 helpers ──────────────────────────────────────────
@@ -75,7 +75,6 @@ def log_sensor_data(cli, temp, sw):
     """Log only sensor data to the database"""
     fields = {
         'sensors_temp': temp,
-        'temperature': temp,
         'window_open': int(sw.window_open),
         'presence': int(sw.auto_mode),  # Using auto_mode pin to represent presence
     }
