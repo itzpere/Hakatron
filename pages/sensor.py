@@ -180,7 +180,7 @@ except ImportError:
     influxdb_available = False
 
 # Function to check if data is recent enough to be considered valid
-def is_data_recent(timestamp_str, max_age_seconds=30):
+def is_data_recent(timestamp_str, max_age_seconds=60):  # Increased to 60 seconds for more flexibility
     """Check if a timestamp is recent enough to be considered valid"""
     if not timestamp_str:
         return False
@@ -215,37 +215,50 @@ def fetch_latest_sensor_data():
         return False
 
     try:
-        # Get the latest temperature - changed table name from environment to pi
-        temp_result = client.query('SELECT LAST(sensors_temp) FROM pi')
+        # Get the latest temperature - added explicit ORDER BY time DESC to get most recent
+        temp_result = client.query('SELECT sensors_temp FROM pi ORDER BY time DESC LIMIT 1')
         if temp_result:
             points = list(temp_result.get_points())
             if points:
-                latest_temp = points[0]['last']
-                latest_time = points[0]['time']
+                latest_temp = points[0].get('sensors_temp')
+                latest_time = points[0].get('time')
                 
-                if is_data_recent(latest_time):
-                    # Only update if we have temperature data
-                    if latest_temp is not None:
-                        # Add to our data store
-                        temp_data['time'].append(datetime.now().strftime('%H:%M:%S'))
-                        temp_data['temperature'].append(latest_temp)
-                        
-                        # Keep only most recent data points
-                        if len(temp_data['time']) > MAX_DATA_POINTS:
-                            temp_data['time'] = temp_data['time'][-MAX_DATA_POINTS:]
-                            temp_data['temperature'] = temp_data['temperature'][-MAX_DATA_POINTS:]
+                print(f"Latest temperature from DB: {latest_temp}°C at {latest_time}")
+                
+                # Only update if we have temperature data
+                if latest_temp is not None:
+                    # Add to our data store
+                    current_time = datetime.now().strftime('%H:%M:%S')
+                    temp_data['time'].append(current_time)
+                    temp_data['temperature'].append(latest_temp)
+                    
+                    print(f"Updated temperature data: {latest_temp}°C at {current_time}")
+                    
+                    # Keep only most recent data points
+                    if len(temp_data['time']) > MAX_DATA_POINTS:
+                        temp_data['time'] = temp_data['time'][-MAX_DATA_POINTS:]
+                        temp_data['temperature'] = temp_data['temperature'][-MAX_DATA_POINTS:]
+                
+                    # Use this temperature to drive heater state
+                    update_heater_state(latest_temp)
+                else:
+                    print("Latest temperature value is None!")
+            else:
+                print("No temperature data points returned")
         
-        # Note: ac_intensity is no longer available in the pi table
-        # Using default or currently stored fan speed
-        
-        # Get the latest window state - changed table from environment to pi
-        window_result = client.query('SELECT LAST(window_open) FROM pi')
+        # Get the latest window state - added explicit ORDER BY time DESC
+        window_result = client.query('SELECT window_open FROM pi ORDER BY time DESC LIMIT 1')
         if window_result:
             points = list(window_result.get_points())
-            if points and points[0]['last'] is not None:
-                window_open = bool(int(points[0]['last']))
+            if points and points[0].get('window_open') is not None:
+                new_window_state = bool(int(points[0]['window_open']))
                 
-                # Update window history
+                # Update global state only if different
+                if window_open != new_window_state:
+                    window_open = new_window_state
+                    print(f"Window state updated: {'open' if window_open else 'closed'}")
+                
+                # Always update window history
                 current_time = datetime.now().strftime('%H:%M:%S')
                 window_history['time'].append(current_time)
                 window_history['state'].append(1 if window_open else 0)
@@ -255,14 +268,19 @@ def fetch_latest_sensor_data():
                     window_history['time'] = window_history['time'][-MAX_DATA_POINTS:]
                     window_history['state'] = window_history['state'][-MAX_DATA_POINTS:]
         
-        # Get the latest movement state (presence field) - changed from environment to pi
-        movement_result = client.query('SELECT LAST(presence) FROM pi')
+        # Get the latest movement state (presence field) - added explicit ORDER BY time DESC
+        movement_result = client.query('SELECT presence FROM pi ORDER BY time DESC LIMIT 1')
         if movement_result:
             points = list(movement_result.get_points())
-            if points and points[0]['last'] is not None:
-                movement_detected = bool(int(points[0]['last']))
+            if points and points[0].get('presence') is not None:
+                new_movement_state = bool(int(points[0]['presence']))
                 
-                # Update movement history
+                # Update global state only if different
+                if movement_detected != new_movement_state:
+                    movement_detected = new_movement_state
+                    print(f"Movement state updated: {'detected' if movement_detected else 'not detected'}")
+                
+                # Always update movement history
                 current_time = datetime.now().strftime('%H:%M:%S')
                 movement_history['time'].append(current_time)
                 movement_history['state'].append(1 if movement_detected else 0)
@@ -272,15 +290,12 @@ def fetch_latest_sensor_data():
                     movement_history['time'] = movement_history['time'][-MAX_DATA_POINTS:]
                     movement_history['state'] = movement_history['state'][-MAX_DATA_POINTS:]
         
-        # Note: target_temp and mode are no longer available in the pi table
-        # Using default values or current values
-        
         return True
     except Exception as e:
         print(f"Error fetching sensor data from database: {e}")
         return False
 
-# Initialize InfluxDB client if available
+# Initialize InfluxDB client if available - fix timeout issue
 client = None
 connection_error = None
 if influxdb_available:
@@ -323,9 +338,22 @@ if influxdb_available:
                 # Switch to our database
                 client.switch_database(INFLUXDB_DATABASE)
                 
+                # Check if we have data and what the latest values are
+                try:
+                    check_query = "SELECT LAST(sensors_temp) FROM pi"
+                    result = client.query(check_query)
+                    points = list(result.get_points())
+                    if points:
+                        latest_temp = points[0].get('last')
+                        latest_time = points[0].get('time')
+                        print(f"Latest temperature in database: {latest_temp}°C at {latest_time}")
+                    else:
+                        print("No temperature data found in database")
+                except Exception as e:
+                    print(f"Error checking latest data: {e}")
+                
                 # Connection successful, break the retry loop
                 break
-            
             except ConnectionError as e:
                 retry_count += 1
                 connection_error = str(e)
@@ -1004,31 +1032,55 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
     # Try to query from InfluxDB if available and not using random data
     if client is not None and not use_random:
         try:
-            # Query historical temperature data for the last hour - changed table to pi
-            query = 'SELECT sensors_temp FROM pi WHERE time > now() - 1h'
+            # Query historical temperature data for the last hour - explicitly sort by time
+            query = 'SELECT sensors_temp FROM pi WHERE time > now() - 1h ORDER BY time ASC'
+            print(f"Querying historical temperature: {query}")
             result = client.query(query)
             
             if result:
                 # Process points from the result
                 points = list(result.get_points())
+                print(f"Found {len(points)} temperature points")
+                
                 if points:
                     times = [point['time'] for point in points]
                     temperatures = [point['sensors_temp'] for point in points if point['sensors_temp'] is not None]
                     
                     if times and temperatures:
+                        # Format times to be more readable
+                        formatted_times = []
+                        for t in times:
+                            try:
+                                # Extract HH:MM:SS from the ISO timestamp
+                                t_parts = t.split('T')[1].split('.')
+                                formatted_times.append(t_parts[0])
+                            except:
+                                # If there's an error, just use the raw time
+                                formatted_times.append(t)
+                        
                         # Update local cache
-                        temp_data['time'] = [t.split('T')[1].split('.')[0] for t in times[-MAX_DATA_POINTS:]]  # Format time
+                        temp_data['time'] = formatted_times[-MAX_DATA_POINTS:]
                         temp_data['temperature'] = temperatures[-MAX_DATA_POINTS:]
+                        
+                        print(f"Updated temperature history with {len(temp_data['time'])} data points")
+                        if temp_data['temperature']:
+                            print(f"Temperature range: {min(temp_data['temperature'])} to {max(temp_data['temperature'])}")
+                            print(f"Latest temperature: {temp_data['temperature'][-1]}°C")
                     else:
                         use_random = True  # Fall back to random if no valid data
+                        print("No valid temperature time/value pairs found")
+                else:
+                    use_random = True  # No results, fall back to random
+                    print("No temperature data points found")
             else:
                 use_random = True  # No results, fall back to random
+                print("No temperature data returned from query")
             
             # Note: Fan speed data (ac_intensity) is no longer in the pi table
             # Using current values or defaults
         
-            # Query historical window state data - changed table to pi
-            window_query = 'SELECT window_open FROM pi WHERE time > now() - 1h'
+            # Query historical window state data with proper sorting
+            window_query = 'SELECT window_open FROM pi WHERE time > now() - 1h ORDER BY time ASC'
             window_result = client.query(window_query)
             
             if window_result:
@@ -1041,9 +1093,10 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                     if window_times and window_states:
                         window_history['time'] = [t.split('T')[1].split('.')[0] for t in window_times[-MAX_DATA_POINTS:]]
                         window_history['state'] = [1 if state else 0 for state in window_states[-MAX_DATA_POINTS:]]
+                        print(f"Updated window history with {len(window_history['time'])} points, last state: {window_states[-1]}")
             
-            # Query historical movement sensor data (presence field) - changed table to pi
-            movement_query = 'SELECT presence FROM pi WHERE time > now() - 1h'
+            # Query historical movement sensor data with proper sorting
+            movement_query = 'SELECT presence FROM pi WHERE time > now() - 1h ORDER BY time ASC'
             movement_result = client.query(movement_query)
             
             if movement_result:
@@ -1055,8 +1108,8 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                     
                     if movement_times and movement_states:
                         movement_history['time'] = [t.split('T')[1].split('.')[0] for t in movement_times[-MAX_DATA_POINTS:]]
-                        movement_history['state'] = [1 if state else 0 for state in movement_states[-MAX_DATA_POINTS:]
-            ]
+                        movement_history['state'] = [1 if state else 0 for state in movement_states[-MAX_DATA_POINTS:]]
+                        print(f"Updated movement history with {len(movement_history['time'])} points, last state: {movement_states[-1]}")
         except Exception as e:
             print(f"Error querying historical data: {e}")
             use_random = True  # Fall back to random on error
@@ -1140,9 +1193,16 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
         bgcolor="rgba(255, 255, 255, 0.7)"
     )
     
-    # Set up the layout with dual Y-axis
+    # Set up the layout with dual Y-axis - fixed f-string properly
+    # Create title suffix first to avoid nested f-strings
+    if use_random:
+        title_suffix = "(Random Data)"
+    else:
+        last_temp = temp_data['temperature'][-1] if temp_data['temperature'] else 0
+        title_suffix = f"(Last: {last_temp:.1f}°C)"
+        
     fig.update_layout(
-        title=f"Temperature & Fan Speed {'(Random Data)' if use_random else ''}",
+        title=f"Temperature & Fan Speed {title_suffix}",
         xaxis_title='Time',
         yaxis=dict(
             title='Temperature (°C)',

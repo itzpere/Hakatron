@@ -20,7 +20,7 @@ from influxdb import InfluxDBClient
 # ───────── pinout & constants ───────────────────────────────────────
 PIN_SW1, PIN_SW2 = 23, 24
 
-LOG_INTERVAL = 1.0  # s - 1 second regular updates
+LOG_INTERVAL = 2.5  # s - 1 second regular updates
 CONFIG_CHECK_INTERVAL = 10.0  # s - check config less frequently
 
 INFLUX = {
