@@ -515,10 +515,21 @@ layout = html.Div([
                                               'borderRadius': '4px', 'cursor': 'pointer'}),
                             
                             html.Button("Automatic", id="automatic-mode-button", 
-                                        style={'width': '100%', 'padding': '10px',
+                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
                                               'backgroundColor': '#2196F3', 'color': 'white', 'border': 'none',
+                                              'borderRadius': '4px', 'cursor': 'pointer'}),
+                                              
+                            html.Button("Low", id="low-mode-button", 
+                                        style={'marginBottom': '10px', 'width': '100%', 'padding': '10px',
+                                              'backgroundColor': '#81D4FA', 'color': 'white', 'border': 'none',
+                                              'borderRadius': '4px', 'cursor': 'pointer'}),
+                                              
+                            html.Button("OFF", id="off-mode-button", 
+                                        style={'width': '100%', 'padding': '10px',
+                                              'backgroundColor': '#f44336', 'color': 'white', 'border': 'none',
                                               'borderRadius': '4px', 'cursor': 'pointer'})
                         ]),
+                        
                         html.Div([
                             html.P("Active Mode:", style={'marginTop': '15px', 'display': 'inline-block'}),
                             html.P(id="active-mode", children=ACTIVE_MODE, 
@@ -699,199 +710,6 @@ layout = html.Div([
     ], style={'margin': '20px', 'padding': '15px', 'backgroundColor': '#f9f9f9', 'borderRadius': '10px'})
 ])
 
-# New function to log all parameters to InfluxDB
-def log_parameters_to_influxdb():
-    """Log all current parameters to InfluxDB"""
-    if client and not USE_RANDOM_DATA:
-        try:
-            current_time = datetime.now()
-            
-            # Convert UI mode to standardized database mode
-            ui_to_db_mode = {
-                "PID": "PID",
-                "Automatic": "AUTO",
-                "Ručni": "MANUAL", 
-                "Low": "LOW",
-                "OFF": "OFF"
-            }
-            
-            # Use the standardized mode for database
-            db_mode = ui_to_db_mode.get(ACTIVE_MODE, "AUTO")
-            
-            # Prepare all parameters to log
-            points = [
-                {
-                    'measurement': 'temperature',
-                    'time': current_time,
-                    'fields': {
-                        'value': temp_data['temperature'][-1] if temp_data['temperature'] else None,
-                        'target': float(target_temperature)
-                    }
-                },
-                {
-                    'measurement': 'heater',
-                    'time': current_time,
-                    'fields': {
-                        'state': int(heater_state)
-                    }
-                },
-                {
-                    'measurement': 'fan',
-                    'time': current_time,
-                    'fields': {
-                        'speed': int(fan_speed)  # This is just for our internal metrics
-                    }
-                },
-                {
-                    'measurement': 'environment',  # Use the environment measurement
-                    'time': current_time,
-                    'fields': {
-                        'sensors_temp': temp_data['temperature'][-1] if temp_data['temperature'] else None,
-                        'ac_intensity': float(fan_speed),  # Map fan_speed to ac_intensity
-                        'presence': int(movement_detected),  # Correct field name for movement detection
-                        'window_open': int(window_open),
-                        'target_temp': float(target_temperature),
-                        'mode': db_mode,  # Use standardized mode value
-                        'on': int(DEVICE_ON)
-                    }
-                }
-            ]
-            
-            # Write all points to InfluxDB
-            client.write_points(points)
-            print(f"Successfully logged all parameters to InfluxDB at {current_time}")
-        except Exception as e:
-            print(f"Error logging parameters to InfluxDB: {e}")
-
-# Mode buttons callback - updated to also handle control states
-@callback(
-    [Output('active-mode', 'children'),
-     Output('target-temp-input', 'value'),
-     Output('current-target-temp', 'children'),
-     Output('target-temp-input', 'disabled'),
-     Output('set-temp-button', 'disabled'),
-     Output('fan-speed-slider', 'disabled'),
-     Output('target-temp-input', 'style'),
-     Output('set-temp-button', 'style'),
-     Output('control-panel', 'style')],  # Added this output
-    [Input('pid-mode-button', 'n_clicks'),
-     Input('Ručni-mode-button', 'n_clicks'),
-     Input('automatic-mode-button', 'n_clicks')],
-    prevent_initial_call=True
-)
-def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks):
-    global target_temperature, ACTIVE_MODE, temp_control_disabled, fan_control_disabled
-    
-    # Default button styles
-    input_style = {
-        'width': '120px', 
-        'height': '40px', 
-        'fontSize': '18px', 
-        'textAlign': 'center',
-        'borderRadius': '4px',
-        'border': '2px solid #2196F3'
-    }
-    
-    button_style = {
-        'marginLeft': '10px',
-        'height': '40px',
-        'width': '60px',
-        'fontSize': '16px',
-        'backgroundColor': '#2196F3',
-        'color': 'white',
-        'border': 'none',
-        'borderRadius': '4px',
-        'cursor': 'pointer'
-    }
-    
-    # Default control panel style
-    control_panel_style = {
-        'margin': '10px', 
-        'marginTop': '20px', 
-        'padding': '20px', 
-        'backgroundColor': '#f0f0f0', 
-        'borderRadius': '10px', 
-        'textAlign': 'center'
-    }
-    
-    # Determine which button was clicked using callback context
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        # No button clicked yet, return current state
-        return (ACTIVE_MODE, target_temperature, f"{target_temperature} °C", 
-                temp_control_disabled, temp_control_disabled, fan_control_disabled, 
-                input_style, button_style, control_panel_style)
-    
-    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    # Set modes and disabled states based on button clicked
-    if button_id == "pid-mode-button":
-        ACTIVE_MODE = "PID"  # UI mode
-        target_temperature = PID_TEMP
-        # PID mode: Enable temperature control, disable fan control
-        temp_control_disabled = False
-        fan_control_disabled = True
-    
-    elif button_id == "automatic-mode-button":
-        ACTIVE_MODE = "Automatic"  # UI mode
-        target_temperature = AUTOMATIC_TEMP
-        # Automatic mode: Disable both controls and hide control panel
-        temp_control_disabled = True
-        fan_control_disabled = True
-        control_panel_style['display'] = 'none'  # Hide the control panel
-    
-    elif button_id == "Ručni-mode-button":
-        ACTIVE_MODE = "Ručni"  # UI mode
-        # Keep current temperature
-        # Ručni mode: Disable temperature control, enable fan control
-        temp_control_disabled = True
-        fan_control_disabled = False
-    
-    # Update styling for disabled state
-    if temp_control_disabled:
-        input_style.update({
-            'backgroundColor': '#f0f0f0',
-            'border': '2px solid #cccccc',
-            'color': '#999999',
-            'cursor': 'not-allowed'
-        })
-        button_style.update({
-            'backgroundColor': '#cccccc',
-            'color': '#666666',
-            'cursor': 'not-allowed'
-        })
-    
-    # Log the mode change to InfluxDB
-    log_parameters_to_influxdb()
-    
-    return (ACTIVE_MODE, 
-            target_temperature, 
-            f"{target_temperature} °C", 
-            temp_control_disabled,
-            temp_control_disabled, 
-            fan_control_disabled,
-            input_style,
-            button_style,
-            control_panel_style)
-
-# Target temperature setting callback - update to work with modes
-@callback(
-    [Output('current-target-temp', 'children', allow_duplicate=True)],
-    [Input('set-temp-button', 'n_clicks')],
-    [State('target-temp-input', 'value')],
-    prevent_initial_call=True
-)
-def update_target_temperature(n_clicks, value):
-    global target_temperature, ACTIVE_MODE
-    if n_clicks is not None and value is not None:
-        target_temperature = float(value)
-        ACTIVE_MODE = "Ručni"  # Setting manual temperature always switches to Ručni mode
-        
-        # Log the target temperature change
-        log_parameters_to_influxdb()
-        
-    return [f"{target_temperature} °C"]
-
 # Current temperature callback with sensor state monitoring
 @callback(
     [Output('heater-status', 'style'),
@@ -903,7 +721,7 @@ def update_target_temperature(n_clicks, value):
     [Input('interval-component', 'n_intervals')]
 )
 def update_current_temp(n):
-    global ACTIVE_MODE
+    global ACTIVE_MODE, temp_control_disabled, fan_control_disabled
     
     # Store previous sensor states to detect changes
     prev_window_state = window_open
@@ -925,32 +743,71 @@ def update_current_temp(n):
         is_movement = movement_detected
         is_window_open = window_open
     
-    # Check for sensor state changes that might require mode updates
-    if is_window_open != prev_window_state:
-        if is_window_open:
-            # Window opened - switch to OFF mode
-            ACTIVE_MODE = "OFF"
-            print("Window opened - switching to OFF mode")
+    # Track if any sensor state changed
+    sensor_changed = (is_window_open != prev_window_state or 
+                     is_movement != prev_movement_state)
+    
+    # Comprehensive mode selection logic with prioritization
+    # Following the same priority rules as in prvisamjojkosemrsio.py
+    old_mode = ACTIVE_MODE
+    
+    # Determine the appropriate mode based on current sensor states
+    if is_window_open:
+        # Window open always takes highest priority - safety first!
+        new_mode = "OFF"
+        if is_window_open != prev_window_state:
+            print("SENSOR CHANGE: Window opened - switching to OFF mode")
+    elif is_movement:
+        # Movement detected - use Automatic mode for comfort
+        if ACTIVE_MODE == "Low":
+            new_mode = "Automatic"
+            if is_movement != prev_movement_state:
+                print("SENSOR CHANGE: Movement detected - switching from Low to Automatic mode")
         else:
-            # Window closed - switch to Automatic mode
-            ACTIVE_MODE = "Automatic"
-            print("Window closed - switching to Automatic mode")
+            # Keep current mode if already in a higher priority mode
+            new_mode = ACTIVE_MODE
+    else:
+        # No movement, no window open - consider energy saving
+        if ACTIVE_MODE == "Automatic":
+            # Only switch to Low mode if coming from Automatic
+            # Don't change PID, MANUAL, or other modes
+            new_mode = "Low"
+            print("SENSOR CHANGE: No movement - switching to Low energy mode")
+        else:
+            # Keep current mode
+            new_mode = ACTIVE_MODE
+            
+    # Special case: Don't override MANUAL or PID modes with automatic changes
+    # unless it's a safety issue (window open)
+    if not is_window_open and (ACTIVE_MODE == "PID" or ACTIVE_MODE == "Ručni"):
+        new_mode = ACTIVE_MODE
+    
+    # Update the mode if changed
+    if new_mode != ACTIVE_MODE:
+        ACTIVE_MODE = new_mode
+        print(f"Mode changed from {old_mode} to {ACTIVE_MODE}")
         
-        # Log the mode change
+        # Update control states based on the new mode
+        if ACTIVE_MODE == "PID":
+            temp_control_disabled = False
+            fan_control_disabled = True
+        elif ACTIVE_MODE == "Automatic":
+            temp_control_disabled = True
+            fan_control_disabled = True
+        elif ACTIVE_MODE == "Ručni":
+            temp_control_disabled = True
+            fan_control_disabled = False
+        elif ACTIVE_MODE == "Low":
+            temp_control_disabled = True
+            fan_control_disabled = True
+        elif ACTIVE_MODE == "OFF":
+            temp_control_disabled = True
+            fan_control_disabled = True
+        
+        # Log the mode change to database
         log_parameters_to_influxdb()
     
-    # Check for presence/movement changes
-    if is_movement != prev_movement_state:
-        if is_movement:
-            # Movement detected - consider switching to AUTO mode if in LOW
-            if ACTIVE_MODE == "Low":
-                ACTIVE_MODE = "Automatic"
-                print("Movement detected - switching from Low to Automatic mode")
-                log_parameters_to_influxdb()
-        else:
-            # No movement - could switch to LOW mode to save energy (optional)
-            pass
-    
+    # Process temperature data and update device state
     if temp_data['temperature']:
         current_temp = temp_data['temperature'][-1]
         
@@ -993,8 +850,9 @@ def update_current_temp(n):
         }
         window_text = "Open" if is_window_open else "Closed"
         
-        # Log all parameters to InfluxDB
-        log_parameters_to_influxdb()
+        # Always log current state to database, even if mode didn't change
+        if sensor_changed:
+            log_parameters_to_influxdb()
         
         return heater_style, heater_text, movement_style, movement_text, window_style, window_text
     
@@ -1554,3 +1412,164 @@ def toggle_device(n_clicks, current_state):
     log_parameters_to_influxdb()
     
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
+
+# New function to log all parameters to InfluxDB
+def log_parameters_to_influxdb():
+    """Log all current parameters to InfluxDB"""
+    if client and not USE_RANDOM_DATA:
+        try:
+            current_time = datetime.now()
+            
+            # Calculate appropriate fan speed based on mode and temperature
+            current_fan_speed = calculate_dynamic_fan_speed(
+                temp_data['temperature'][-1] if temp_data['temperature'] else 22.0,
+                target_temperature,
+                window_open,
+                ACTIVE_MODE,
+                fan_speed
+            )
+            
+            # Prepare all parameters to log
+            points = [
+                {
+                    'measurement': 'temperature',
+                    'time': current_time,
+                    'fields': {
+                        'value': temp_data['temperature'][-1] if temp_data['temperature'] else None,
+                        'target': float(target_temperature)
+                    }
+                },
+                {
+                    'measurement': 'heater',
+                    'time': current_time,
+                    'fields': {
+                        'state': int(heater_state)
+                    }
+                },
+                {
+                    'measurement': 'fan',
+                    'time': current_time,
+                    'fields': {
+                        'speed': int(fan_speed)  # This is just for our internal metrics
+                    }
+                },
+                {
+                    'measurement': 'environment',  # Use the environment measurement
+                    'time': current_time,
+                    'fields': {
+                        'sensors_temp': temp_data['temperature'][-1] if temp_data['temperature'] else None,
+                        'ac_intensity': float(current_fan_speed),  # Use calculated fan speed
+                        'presence': int(movement_detected),
+                        'window_open': int(window_open),
+                        'target_temp': float(target_temperature),
+                        'on': int(DEVICE_ON)
+                    }
+                }
+            ]
+            
+            # Write all points to InfluxDB
+            client.write_points(points)
+            print(f"Successfully logged all parameters to InfluxDB at {current_time}")
+        except Exception as e:
+            print(f"Error logging parameters to InfluxDB: {e}")
+
+# New function to calculate fan speed based on mode and conditions
+def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, current_mode, current_fan):
+    """Calculate appropriate fan speed based on mode and conditions"""
+    
+    # If window is open, always turn off fans
+    if window_is_open:
+        return 0
+    
+    # Mode-specific behavior
+    if current_mode == "OFF":
+        return 0
+    elif current_mode == "Low":
+        return 10  # Low constant speed (10%)
+    elif current_mode == "Ručni":
+        return current_fan  # Use user-set fan speed
+    elif current_mode == "PID":
+        # Simple PID-like control (proportional only for simplicity)
+        delta = abs(current_temp - target_temp)
+        pid_output = min(100, max(0, delta * 8.0))  # Simple P control with kp=8.0
+        return pid_output
+    else:  # Automatic mode
+        # Simple 3-level fan control based on temperature difference
+        delta = abs(current_temp - target_temp)
+        if delta <= 2:
+            return 25  # Low speed
+        elif delta <= 5:
+            return 60  # Medium speed
+        else:
+            return 100  # High speed
+
+# Mode buttons callback - handles all mode buttons including Low and OFF
+@callback(
+    [Output('active-mode', 'children'),
+     Output('target-temp-input', 'disabled'),
+     Output('set-temp-button', 'disabled'),
+     Output('fan-speed-slider', 'disabled'),
+     Output('control-panel', 'style')],
+    [Input('pid-mode-button', 'n_clicks'),
+     Input('Ručni-mode-button', 'n_clicks'),
+     Input('automatic-mode-button', 'n_clicks'),
+     Input('low-mode-button', 'n_clicks'),
+     Input('off-mode-button', 'n_clicks')],
+    prevent_initial_call=True
+)
+def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_clicks, off_clicks):
+    global ACTIVE_MODE, temp_control_disabled, fan_control_disabled, target_temperature
+    
+    # Default control panel style
+    control_panel_style = {
+        'margin': '10px', 
+        'marginTop': '20px', 
+        'padding': '20px', 
+        'backgroundColor': '#f0f0f0', 
+        'borderRadius': '10px', 
+        'textAlign': 'center'
+    }
+    
+    # Determine which button was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        # No button clicked yet, return current state
+        return ACTIVE_MODE, temp_control_disabled, temp_control_disabled, fan_control_disabled, control_panel_style
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Set modes and disabled states based on button clicked
+    if button_id == "pid-mode-button":
+        ACTIVE_MODE = "PID"
+        target_temperature = PID_TEMP
+        temp_control_disabled = False
+        fan_control_disabled = True
+    
+    elif button_id == "automatic-mode-button":
+        ACTIVE_MODE = "Automatic"
+        target_temperature = AUTOMATIC_TEMP
+        temp_control_disabled = True
+        fan_control_disabled = True
+    
+    elif button_id == "Ručni-mode-button":
+        ACTIVE_MODE = "Ručni"
+        # Keep current target temperature
+        temp_control_disabled = True
+        fan_control_disabled = False
+        
+    elif button_id == "low-mode-button":
+        ACTIVE_MODE = "Low"
+        temp_control_disabled = True
+        fan_control_disabled = True
+        
+    elif button_id == "off-mode-button":
+        ACTIVE_MODE = "OFF"
+        temp_control_disabled = True
+        fan_control_disabled = True
+        # Hide control panel in OFF mode
+        control_panel_style['display'] = 'none'
+    
+    # Log the mode change to InfluxDB
+    log_parameters_to_influxdb()
+    
+    return ACTIVE_MODE, temp_control_disabled, temp_control_disabled, fan_control_disabled, control_panel_style
