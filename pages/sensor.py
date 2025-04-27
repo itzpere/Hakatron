@@ -19,7 +19,7 @@ DEVICE_ON = True  # Default to on
 # Temperature mode settings
 PID_TEMP = 22
 AUTOMATIC_TEMP = 22
-ACTIVE_MODE = "Automatic"  # Default mode changed from "Ručni" to "Automatic"
+ACTIVE_MODE = "OFF"  # Default mode changed from "Ručni" to "Automatic"
 
 # Control state variables (enabled/disabled)
 temp_control_disabled = True  # Set to True for Automatic mode
@@ -1848,9 +1848,9 @@ def update_ui_from_mode(mode_data, current_input_target_temp):
         
     elif current_mode == "Automatic":
         target_temperature = AUTOMATIC_TEMP # Use predefined automatic temp
-        temp_control_disabled = True
+        temp_control_disabled = False # Allow setting target temp in Automatic mode
         fan_control_disabled = True
-        temp_section_style['display'] = 'inline-block' # Show temp display (disabled)
+        temp_section_style['display'] = 'inline-block' # Show temp display (enabled)
         fan_section_style['display'] = 'none'
         pid_section_style['display'] = 'none'
         
@@ -1918,17 +1918,26 @@ def update_ui_from_mode(mode_data, current_input_target_temp):
     prevent_initial_call=True
 )
 def set_target_temperature(n_clicks, new_target):
-    global target_temperature
+    global target_temperature, AUTOMATIC_TEMP, PID_TEMP
     if n_clicks is None or new_target is None:
         return dash.no_update
         
-    # Only update if in PID mode (although button should be disabled otherwise)
+    # Update target temperature if in PID or Automatic mode
     if ACTIVE_MODE == "PID":
         target_temperature = new_target
-        print(f"Target temperature set to: {target_temperature}°C")
+        PID_TEMP = new_target # Update the default PID temp as well
+        print(f"PID Target temperature set to: {target_temperature}°C")
         # Log the change
         log_parameters_to_influxdb()
         return f"{target_temperature} °C"
+    elif ACTIVE_MODE == "Automatic":
+        target_temperature = new_target
+        AUTOMATIC_TEMP = new_target # Update the default Automatic temp as well
+        print(f"Automatic Target temperature set to: {target_temperature}°C")
+        # Log the change
+        log_parameters_to_influxdb()
+        return f"{target_temperature} °C"
+
     
     return dash.no_update # Should not happen if UI is correct
 
