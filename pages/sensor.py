@@ -208,7 +208,7 @@ def is_data_recent(timestamp_str, max_age_seconds=30):
 
 # Function to fetch latest sensor values from database
 def fetch_latest_sensor_data():
-    global temp_data, fan_speed, window_open, movement_detected, target_temperature, ACTIVE_MODE
+    global temp_data, fan_speed, window_open, movement_detected, target_temperature, ACTIVE_MODE, temp_control_disabled, fan_control_disabled
     
     if client is None:
         print("No database connection, using random data")
@@ -299,17 +299,19 @@ def fetch_latest_sensor_data():
         if mode_result:
             points = list(mode_result.get_points())
             if points and points[0]['last'] is not None:
-                mode = points[0]['last']
-                if mode in ["PID", "AUTO", "WINDOW", "MANUAL", "LOW", "Automatic", "Ručni"]:
-                    # Map the modes from the sensor to our dashboard modes
-                    mode_mapping = {
-                        "PID": "PID",
-                        "AUTO": "Automatic",
-                        "MANUAL": "Ručni",
-                        "LOW": "Ručni",
-                        "WINDOW": "Automatic",  # When window open, default to Automatic
-                    }
-                    ACTIVE_MODE = mode_mapping.get(mode, mode)
+                db_mode = points[0]['last']
+                
+                # Standardized mode mapping from database values to UI display values
+                mode_mapping = {
+                    "PID": "PID",
+                    "AUTO": "Automatic",
+                    "MANUAL": "Ručni",
+                    "LOW": "Low",
+                    "OFF": "OFF"
+                }
+                
+                if db_mode in mode_mapping:
+                    ACTIVE_MODE = mode_mapping[db_mode]
                     
                     # Update control states based on mode
                     if ACTIVE_MODE == "PID":
@@ -321,6 +323,12 @@ def fetch_latest_sensor_data():
                     elif ACTIVE_MODE == "Ručni":
                         temp_control_disabled = True
                         fan_control_disabled = False
+                    elif ACTIVE_MODE == "Low":
+                        temp_control_disabled = True
+                        fan_control_disabled = True
+                    elif ACTIVE_MODE == "OFF":
+                        temp_control_disabled = True
+                        fan_control_disabled = True
         
         return True
     except Exception as e:
@@ -698,6 +706,18 @@ def log_parameters_to_influxdb():
         try:
             current_time = datetime.now()
             
+            # Convert UI mode to standardized database mode
+            ui_to_db_mode = {
+                "PID": "PID",
+                "Automatic": "AUTO",
+                "Ručni": "MANUAL", 
+                "Low": "LOW",
+                "OFF": "OFF"
+            }
+            
+            # Use the standardized mode for database
+            db_mode = ui_to_db_mode.get(ACTIVE_MODE, "AUTO")
+            
             # Prepare all parameters to log
             points = [
                 {
@@ -731,7 +751,7 @@ def log_parameters_to_influxdb():
                         'presence': int(movement_detected),  # Correct field name for movement detection
                         'window_open': int(window_open),
                         'target_temp': float(target_temperature),
-                        'mode': ACTIVE_MODE,
+                        'mode': db_mode,  # Use standardized mode value
                         'on': int(DEVICE_ON)
                     }
                 }
@@ -806,14 +826,14 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks):
     
     # Set modes and disabled states based on button clicked
     if button_id == "pid-mode-button":
-        ACTIVE_MODE = "PID"
+        ACTIVE_MODE = "PID"  # UI mode
         target_temperature = PID_TEMP
         # PID mode: Enable temperature control, disable fan control
         temp_control_disabled = False
         fan_control_disabled = True
     
     elif button_id == "automatic-mode-button":
-        ACTIVE_MODE = "Automatic"
+        ACTIVE_MODE = "Automatic"  # UI mode
         target_temperature = AUTOMATIC_TEMP
         # Automatic mode: Disable both controls and hide control panel
         temp_control_disabled = True
@@ -821,7 +841,7 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks):
         control_panel_style['display'] = 'none'  # Hide the control panel
     
     elif button_id == "Ručni-mode-button":
-        ACTIVE_MODE = "Ručni"
+        ACTIVE_MODE = "Ručni"  # UI mode
         # Keep current temperature
         # Ručni mode: Disable temperature control, enable fan control
         temp_control_disabled = True
@@ -872,7 +892,7 @@ def update_target_temperature(n_clicks, value):
         
     return [f"{target_temperature} °C"]
 
-# Current temperature callback - MODIFIED to try reading from database first
+# Current temperature callback with sensor state monitoring
 @callback(
     [Output('heater-status', 'style'),
      Output('heater-status-text', 'children'),
@@ -883,6 +903,12 @@ def update_target_temperature(n_clicks, value):
     [Input('interval-component', 'n_intervals')]
 )
 def update_current_temp(n):
+    global ACTIVE_MODE
+    
+    # Store previous sensor states to detect changes
+    prev_window_state = window_open
+    prev_movement_state = movement_detected
+    
     # First try to get data from the database
     use_random = USE_RANDOM_DATA
     if not use_random:
@@ -898,6 +924,32 @@ def update_current_temp(n):
         # Use the values fetched from the database
         is_movement = movement_detected
         is_window_open = window_open
+    
+    # Check for sensor state changes that might require mode updates
+    if is_window_open != prev_window_state:
+        if is_window_open:
+            # Window opened - switch to OFF mode
+            ACTIVE_MODE = "OFF"
+            print("Window opened - switching to OFF mode")
+        else:
+            # Window closed - switch to Automatic mode
+            ACTIVE_MODE = "Automatic"
+            print("Window closed - switching to Automatic mode")
+        
+        # Log the mode change
+        log_parameters_to_influxdb()
+    
+    # Check for presence/movement changes
+    if is_movement != prev_movement_state:
+        if is_movement:
+            # Movement detected - consider switching to AUTO mode if in LOW
+            if ACTIVE_MODE == "Low":
+                ACTIVE_MODE = "Automatic"
+                print("Movement detected - switching from Low to Automatic mode")
+                log_parameters_to_influxdb()
+        else:
+            # No movement - could switch to LOW mode to save energy (optional)
+            pass
     
     if temp_data['temperature']:
         current_temp = temp_data['temperature'][-1]

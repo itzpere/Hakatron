@@ -227,40 +227,49 @@ def main():
             pid_out, integral, prev_error = pid_step(delta, dt, pid_p, integral, prev_error)
 
             sw = read_switches()
-            cmd = compute_command(temp, target, sw, manual, pid_out)
-
-            update_leds(cmd.fan_speed, pwms)
             
             # Check for sensor changes that should trigger mode changes
-            sensor_changed = (sw.window_open != prev_window_state or 
-                             sw.auto_mode != prev_auto_mode or
-                             manual != prev_manual_speed)
+            window_changed = sw.window_open != prev_window_state
+            auto_mode_changed = sw.auto_mode != prev_auto_mode
+            manual_changed = manual != prev_manual_speed
             
-            # Store current state for next comparison
-            prev_window_state = sw.window_open
-            prev_auto_mode = sw.auto_mode
-            prev_manual_speed = manual
-            
-            # Determine mode based on the current sensor states and priority rules
+            # Set the mode based on current sensor states with priority rules
             if sw.window_open:
                 # Window open always takes highest priority - safety first!
-                mode = 'WINDOW'
-                print("SENSOR CHANGE: Window opened - switching to WINDOW mode")
+                mode = 'OFF'  # Changed from WINDOW to OFF for standardization
+                if window_changed:
+                    print("SENSOR CHANGE: Window opened - switching to OFF mode")
+                    # Immediately log this critical change to the database
+                    log_point(cli, temp, ClimateCommand(0, 0.0), sw, target, mode, manual, pid_out)
             elif manual in (1, 2, 3):
                 # Manual speed setting takes second priority
                 mode = 'MANUAL'
-                if sensor_changed:
+                if manual_changed:
                     print(f"SENSOR CHANGE: Manual fan speed set to {manual} - switching to MANUAL mode")
+                    # Immediately log this change
+                    cmd = compute_command(temp, target, sw, manual, pid_out)
+                    log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
             elif sw.auto_mode:
                 # Auto mode takes third priority
                 mode = 'AUTO'
-                if sensor_changed:
+                if auto_mode_changed:
                     print("SENSOR CHANGE: Auto mode switch activated - switching to AUTO mode")
+                    # Immediately log this change
+                    cmd = compute_command(temp, target, sw, manual, pid_out)
+                    log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
             else:
                 # Low mode is the fallback
                 mode = 'LOW'
-                if sensor_changed:
+                if auto_mode_changed:
                     print("SENSOR CHANGE: Auto mode switch deactivated - switching to LOW mode")
+                    # Immediately log this change
+                    cmd = compute_command(temp, target, sw, manual, pid_out)
+                    log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
+            
+            # Now store the current states for next comparison
+            prev_window_state = sw.window_open
+            prev_auto_mode = sw.auto_mode
+            prev_manual_speed = manual
             
             # Server mode can override local mode if server_mode exists and window is not open
             # Window safety takes precedence over server commands
@@ -268,10 +277,15 @@ def main():
                 old_mode = mode
                 mode = server_mode
                 current_mode = mode
-                if sensor_changed and old_mode != mode:
+                if old_mode != mode:
                     print(f"NOTE: Server mode '{mode}' overriding local mode '{old_mode}'")
-                
-            # Update log_point call to include manual speed and pid_output
+            
+            # Now proceed with the regular command processing
+            cmd = compute_command(temp, target, sw, manual, pid_out)
+            update_leds(cmd.fan_speed, pwms)
+            
+            # Always log at the end of the loop to ensure latest state is captured
+            # This provides a regular heartbeat update even when sensors haven't changed
             log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
 
             print(f"{time.strftime('%H:%M:%S')}  "
