@@ -6,6 +6,7 @@ from influxdb import InfluxDBClient
 import datetime
 from alerts_logic import check_window_sensor
 import random
+from dash.exceptions import PreventUpdate
 
 # Global variables for application state
 alert_count = 0  # This will be dynamically updated from database
@@ -136,7 +137,10 @@ def count_alerts():
         return 0  # Return 0 on error
 
 # Initialize the Dash app
-app = dash.Dash(__name__, use_pages=True, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, 
+                use_pages=True, 
+                external_stylesheets=[dbc.themes.DARKLY],  # Dark industrial theme
+                suppress_callback_exceptions=True)
 
 # Define the common layout (navbar will appear on all pages)
 app.layout = html.Div([
@@ -412,24 +416,19 @@ def update_alerts_content(n):
 
 # Update the alert count badge
 @app.callback(
-    [Output('alert-count-badge', 'children'),
-     Output('alert-count-badge', 'style')],
-    [Input('app-interval-component', 'n_intervals')]
+    Output('alert-count-badge', 'children'),
+    Input('app-interval-component', 'n_intervals')
 )
 def update_alert_badge(n):
-    # Get real-time alert count from database
-    current_alert_count = count_alerts()
-    
-    badge_style = {
-        'backgroundColor': '#e74c3c',
-        'color': 'white',
-        'borderRadius': '50%',
-        'padding': '3px 8px',
-        'fontSize': '12px',
-        'fontWeight': 'bold',
-        'display': 'inline-block' if current_alert_count > 0 else 'none'
-    }
-    return str(current_alert_count), badge_style
+    try:
+        current_alert_count = count_alerts()
+        return str(current_alert_count)
+    except Exception as e:
+        print(f"Error updating alert badge: {e}")
+        # Return no_update to keep previous value
+        return dash.no_update
+        # OR use PreventUpdate to prevent update entirely
+        # raise PreventUpdate
 
 # Keep the existing callback for toggling the alerts dropdown
 @app.callback(
@@ -534,4 +533,4 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"Error seeding database with initial alerts: {e}")
     
-    app.run(debug=True, host='0.0.0.0', port=8050)
+    app.run(debug=False, host='0.0.0.0', port=8050)
