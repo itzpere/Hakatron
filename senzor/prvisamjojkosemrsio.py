@@ -155,16 +155,21 @@ def fetch_config(cli, target: float, manual: int, pid_p: PIDParams) -> tuple[flo
         pass
     return target, manual, pid_p
 
-def log_point(cli, temp, cmd, sw, target, mode):
-    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': {
+def log_point(cli, temp, cmd, sw, target, mode, manual_speed=0, pid_output=None):
+    fields = {
         'sensors_temp': temp,
+        'temperature': temp,  # Add temperature field (same as sensors_temp)
         'fan_speed': cmd.fan_speed,
         'ac_intensity': cmd.ac_intensity,
         'auto_mode': int(sw.auto_mode),
         'window_open': int(sw.window_open),
         'target_temp': target,
         'mode': mode,
-    }}])
+        'manual_speed': manual_speed,  # Add manual speed field
+        'pid_output': pid_output if pid_output is not None else 0  # Add PID output field
+    }
+    
+    cli.write_points([{'measurement': INFLUX['measurement'], 'fields': fields}])
 
 # ───────── main loop ───────────────────────────────────────────────
 
@@ -211,7 +216,8 @@ def main():
             mode = ('WINDOW' if sw.window_open else
                     'AUTO' if sw.auto_mode else 'LOW')
                     
-            log_point(cli, temp, cmd, sw, target, mode)
+            # Update log_point call to include manual speed and pid_output
+            log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
 
             print(f"{time.strftime('%H:%M:%S')}  "
                   f"T={temp:5.2f}°C  Set={target:.2f}°C  "
