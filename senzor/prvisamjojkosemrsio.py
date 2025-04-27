@@ -122,7 +122,8 @@ def main():
     prev_auto_mode = True
     
     last_loop = time.time()
-
+    write_counter = 0  # Track successful writes
+    
     print('Sensor Controller running… Ctrl-C to exit')
     try:
         while True:
@@ -168,6 +169,25 @@ def main():
                     print(f"Sensor change detected: window={sw.window_open}, presence={sw.auto_mode}")
                 write_success = log_sensor_data(cli, temp, sw)
                 retry_count += 1
+
+            if write_success:
+                write_counter += 1
+                
+                # Every 2 successful writes, delete the last record
+                if write_counter % 2 == 0:
+                    try:
+                        # Query to find the most recent entry
+                        result = cli.query(f'SELECT * FROM {INFLUX["measurement"]} ORDER BY time DESC LIMIT 1')
+                        points = list(result.get_points())
+                        
+                        if points:
+                            timestamp = points[0]['time']
+                            # Delete the record with this timestamp
+                            delete_query = f'DELETE FROM {INFLUX["measurement"]} WHERE time = \'{timestamp}\''
+                            cli.query(delete_query)
+                            print(f"Deleted entry with timestamp: {timestamp}")
+                    except Exception as e:
+                        print(f"Error deleting last record: {e}")
 
             if not write_success:
                 # Try to reconnect if write failed
