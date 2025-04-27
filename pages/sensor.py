@@ -270,6 +270,23 @@ def fetch_latest_sensor_data():
                     window_history['time'] = window_history['time'][-MAX_DATA_POINTS:]
                     window_history['state'] = window_history['state'][-MAX_DATA_POINTS:]
         
+        # Get the latest movement state (presence field in database)
+        movement_result = client.query('SELECT LAST(presence) FROM environment')
+        if movement_result:
+            points = list(movement_result.get_points())
+            if points and points[0]['last'] is not None:
+                movement_detected = bool(int(points[0]['last']))
+                
+                # Update movement history
+                current_time = datetime.now().strftime('%H:%M:%S')
+                movement_history['time'].append(current_time)
+                movement_history['state'].append(1 if movement_detected else 0)
+                
+                # Keep only recent history
+                if len(movement_history['time']) > MAX_DATA_POINTS:
+                    movement_history['time'] = movement_history['time'][-MAX_DATA_POINTS:]
+                    movement_history['state'] = movement_history['state'][-MAX_DATA_POINTS:]
+        
         # Get the target temperature
         target_result = client.query('SELECT LAST(target_temp) FROM environment')
         if target_result:
@@ -706,13 +723,12 @@ def log_parameters_to_influxdb():
                     }
                 },
                 {
-                    'measurement': INFLUX['measurement'],  # Use the environment measurement
+                    'measurement': 'environment',  # Use the environment measurement
                     'time': current_time,
                     'fields': {
                         'sensors_temp': temp_data['temperature'][-1] if temp_data['temperature'] else None,
-                        'ac_intensity': float(fan_speed),  # Map fan_speed to ac_intensity for the main environment measurement
-                        'fan_speed': 1 if fan_speed > 0 else 0,  # Basic fan_speed setting (on/off)
-                        'movement': int(movement_detected),
+                        'ac_intensity': float(fan_speed),  # Map fan_speed to ac_intensity
+                        'presence': int(movement_detected),  # Correct field name for movement detection
                         'window_open': int(window_open),
                         'target_temp': float(target_temperature),
                         'mode': ACTIVE_MODE,
@@ -1134,6 +1150,37 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                     if fan_times and fan_speeds:
                         fan_history['time'] = [t.split('T')[1].split('.')[0] for t in fan_times[-MAX_DATA_POINTS:]]
                         fan_history['speed'] = fan_speeds[-MAX_DATA_POINTS:]
+        
+            # Query historical window state data
+            window_query = 'SELECT window_open FROM environment WHERE time > now() - 1h'
+            window_result = client.query(window_query)
+            
+            if window_result:
+                window_points = list(window_result.get_points())
+                if window_points:
+                    window_times = [point['time'] for point in window_points]
+                    window_states = [bool(int(point['window_open'])) for point in window_points 
+                                    if point['window_open'] is not None]
+                    
+                    if window_times and window_states:
+                        window_history['time'] = [t.split('T')[1].split('.')[0] for t in window_times[-MAX_DATA_POINTS:]]
+                        window_history['state'] = [1 if state else 0 for state in window_states[-MAX_DATA_POINTS:]]
+            
+            # Query historical movement sensor data (presence field)
+            movement_query = 'SELECT presence FROM environment WHERE time > now() - 1h'
+            movement_result = client.query(movement_query)
+            
+            if movement_result:
+                movement_points = list(movement_result.get_points())
+                if movement_points:
+                    movement_times = [point['time'] for point in movement_points]
+                    movement_states = [bool(int(point['presence'])) for point in movement_points 
+                                      if point['presence'] is not None]
+                    
+                    if movement_times and movement_states:
+                        movement_history['time'] = [t.split('T')[1].split('.')[0] for t in movement_times[-MAX_DATA_POINTS:]]
+                        movement_history['state'] = [1 if state else 0 for state in movement_states[-MAX_DATA_POINTS:]
+            ]
         except Exception as e:
             print(f"Error querying historical data: {e}")
             use_random = True  # Fall back to random on error

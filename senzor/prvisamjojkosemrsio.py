@@ -26,7 +26,7 @@ PIN_LED1, PIN_LED2, PIN_LED3 = 17, 27, 22
 PWM_FREQ = 1000  # Hz
 
 DEFAULT_TARGET = 22.0  # °C
-LOG_INTERVAL = 2.0  # s - reduced from 5.0s to 2.0s for faster updates
+LOG_INTERVAL = 1.0  # s - reduced from 5.0s to 2.0s for faster updates
 CONFIG_CHECK_INTERVAL = 10.0  # s - only check for config changes every 10 seconds
 PID_RESET_INTERVAL = 10.0  # s
 
@@ -190,6 +190,11 @@ def main():
     manual = 0
     pid_p = PIDParams(**DEFAULT_PID)
     current_mode = None  # Initialize current mode
+    
+    # Track previous sensor states to detect changes
+    prev_window_state = False
+    prev_auto_mode = True
+    prev_manual_speed = 0
 
     integral = 0.0
     prev_error = 0.0
@@ -226,21 +231,45 @@ def main():
 
             update_leds(cmd.fan_speed, pwms)
             
-            # Determine mode based on switches (if server hasn't set one)
-            local_mode = ('WINDOW' if sw.window_open else 
-                         'AUTO' if sw.auto_mode else 'LOW')
+            # Check for sensor changes that should trigger mode changes
+            sensor_changed = (sw.window_open != prev_window_state or 
+                             sw.auto_mode != prev_auto_mode or
+                             manual != prev_manual_speed)
             
-            # Use server mode if available, otherwise use locally determined mode
-            mode = server_mode if server_mode else local_mode
-            current_mode = mode  # Update current mode for next iteration
+            # Store current state for next comparison
+            prev_window_state = sw.window_open
+            prev_auto_mode = sw.auto_mode
+            prev_manual_speed = manual
             
-            # Special case: window open always forces WINDOW mode for safety
+            # Determine mode based on the current sensor states and priority rules
             if sw.window_open:
+                # Window open always takes highest priority - safety first!
                 mode = 'WINDOW'
-                
-            # Handle manual mode if a manual speed is set
-            if manual in (1, 2, 3) and mode != 'WINDOW':
+                print("SENSOR CHANGE: Window opened - switching to WINDOW mode")
+            elif manual in (1, 2, 3):
+                # Manual speed setting takes second priority
                 mode = 'MANUAL'
+                if sensor_changed:
+                    print(f"SENSOR CHANGE: Manual fan speed set to {manual} - switching to MANUAL mode")
+            elif sw.auto_mode:
+                # Auto mode takes third priority
+                mode = 'AUTO'
+                if sensor_changed:
+                    print("SENSOR CHANGE: Auto mode switch activated - switching to AUTO mode")
+            else:
+                # Low mode is the fallback
+                mode = 'LOW'
+                if sensor_changed:
+                    print("SENSOR CHANGE: Auto mode switch deactivated - switching to LOW mode")
+            
+            # Server mode can override local mode if server_mode exists and window is not open
+            # Window safety takes precedence over server commands
+            if server_mode and not sw.window_open:
+                old_mode = mode
+                mode = server_mode
+                current_mode = mode
+                if sensor_changed and old_mode != mode:
+                    print(f"NOTE: Server mode '{mode}' overriding local mode '{old_mode}'")
                 
             # Update log_point call to include manual speed and pid_output
             log_point(cli, temp, cmd, sw, target, mode, manual, pid_out)
