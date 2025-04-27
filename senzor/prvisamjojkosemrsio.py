@@ -76,20 +76,38 @@ def log_sensor_data(cli, temp, sw):
     # Round temperature to 3 decimal places for consistency
     temp = round(temp, 3)
     
+    # Create timestamp in nanoseconds using current time
+    current_time = int(time.time() * 1000000000)
+    
     fields = {
         'sensors_temp': temp,
         'window_open': int(sw.window_open),
         'presence': int(sw.auto_mode),  # Using auto_mode pin to represent presence
     }
     
+    point = {
+        'measurement': INFLUX['measurement'], 
+        'fields': fields,
+        'time': current_time  # Explicitly set the timestamp
+    }
+    
     try:
-        result = cli.write_points([{'measurement': INFLUX['measurement'], 'fields': fields}])
+        result = cli.write_points([point], time_precision='n')
         if not result:
             print(f"WARNING: Database write failed at {time.strftime('%H:%M:%S')}")
             return False
         return True
     except Exception as e:
         print(f"ERROR: Database write exception: {e}")
+        return False
+
+def check_connection(cli):
+    """Check if database connection is healthy"""
+    try:
+        # Simple ping to verify connection
+        cli.ping()
+        return True
+    except Exception:
         return False
 
 # ───────── main loop ───────────────────────────────────────────────
@@ -127,12 +145,29 @@ def main():
 
             # Only write once per loop iteration
             write_success = False
-            if sensor_changed:
-                print(f"Sensor change detected: window={sw.window_open}, presence={sw.auto_mode}")
+            retry_count = 0
+            max_retries = 3
+
+            while not write_success and retry_count < max_retries:
+                if retry_count > 0:
+                    print(f"Retry attempt {retry_count}/{max_retries}")
+                
+                # Check connection before attempting write
+                if not check_connection(cli):
+                    print("Database connection lost, reconnecting...")
+                    try:
+                        cli = influx_client()
+                    except Exception as e:
+                        print(f"Reconnection failed: {e}")
+                        time.sleep(1)  # Wait before retry
+                        retry_count += 1
+                        continue
+                        
+                # Now attempt the write
+                if sensor_changed:
+                    print(f"Sensor change detected: window={sw.window_open}, presence={sw.auto_mode}")
                 write_success = log_sensor_data(cli, temp, sw)
-            else:
-                # Only log at regular intervals if no sensor change
-                write_success = log_sensor_data(cli, temp, sw)
+                retry_count += 1
 
             if not write_success:
                 # Try to reconnect if write failed

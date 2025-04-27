@@ -215,8 +215,8 @@ def fetch_latest_sensor_data():
         return False
 
     try:
-        # Get the latest temperature
-        temp_result = client.query('SELECT LAST(sensors_temp) FROM environment')
+        # Get the latest temperature - changed table name from environment to pi
+        temp_result = client.query('SELECT LAST(sensors_temp) FROM pi')
         if temp_result:
             points = list(temp_result.get_points())
             if points:
@@ -235,26 +235,11 @@ def fetch_latest_sensor_data():
                             temp_data['time'] = temp_data['time'][-MAX_DATA_POINTS:]
                             temp_data['temperature'] = temp_data['temperature'][-MAX_DATA_POINTS:]
         
-        # Get the latest fan speed (ac_intensity in database)
-        fan_result = client.query('SELECT LAST(ac_intensity) FROM environment')
-        if fan_result:
-            points = list(fan_result.get_points())
-            if points and points[0]['last'] is not None:
-                latest_fan = points[0]['last']
-                fan_speed = int(latest_fan)
-                
-                # Update fan history
-                current_time = datetime.now().strftime('%H:%M:%S')
-                fan_history['time'].append(current_time)
-                fan_history['speed'].append(fan_speed)
-                
-                # Keep only recent history
-                if len(fan_history['time']) > MAX_DATA_POINTS:
-                    fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
-                    fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        # Note: ac_intensity is no longer available in the pi table
+        # Using default or currently stored fan speed
         
-        # Get the latest window state
-        window_result = client.query('SELECT LAST(window_open) FROM environment')
+        # Get the latest window state - changed table from environment to pi
+        window_result = client.query('SELECT LAST(window_open) FROM pi')
         if window_result:
             points = list(window_result.get_points())
             if points and points[0]['last'] is not None:
@@ -270,8 +255,8 @@ def fetch_latest_sensor_data():
                     window_history['time'] = window_history['time'][-MAX_DATA_POINTS:]
                     window_history['state'] = window_history['state'][-MAX_DATA_POINTS:]
         
-        # Get the latest movement state (presence field in database)
-        movement_result = client.query('SELECT LAST(presence) FROM environment')
+        # Get the latest movement state (presence field) - changed from environment to pi
+        movement_result = client.query('SELECT LAST(presence) FROM pi')
         if movement_result:
             points = list(movement_result.get_points())
             if points and points[0]['last'] is not None:
@@ -287,48 +272,8 @@ def fetch_latest_sensor_data():
                     movement_history['time'] = movement_history['time'][-MAX_DATA_POINTS:]
                     movement_history['state'] = movement_history['state'][-MAX_DATA_POINTS:]
         
-        # Get the target temperature
-        target_result = client.query('SELECT LAST(target_temp) FROM environment')
-        if target_result:
-            points = list(target_result.get_points())
-            if points and points[0]['last'] is not None:
-                target_temperature = float(points[0]['last'])
-        
-        # Get the active mode
-        mode_result = client.query('SELECT LAST(mode) FROM environment')
-        if mode_result:
-            points = list(mode_result.get_points())
-            if points and points[0]['last'] is not None:
-                db_mode = points[0]['last']
-                
-                # Standardized mode mapping from database values to UI display values
-                mode_mapping = {
-                    "PID": "PID",
-                    "AUTO": "Automatic",
-                    "MANUAL": "Ručni",
-                    "LOW": "Low",
-                    "OFF": "OFF"
-                }
-                
-                if db_mode in mode_mapping:
-                    ACTIVE_MODE = mode_mapping[db_mode]
-                    
-                    # Update control states based on mode
-                    if ACTIVE_MODE == "PID":
-                        temp_control_disabled = False
-                        fan_control_disabled = True
-                    elif ACTIVE_MODE == "Automatic":
-                        temp_control_disabled = True
-                        fan_control_disabled = True
-                    elif ACTIVE_MODE == "Ručni":
-                        temp_control_disabled = True
-                        fan_control_disabled = False
-                    elif ACTIVE_MODE == "Low":
-                        temp_control_disabled = True
-                        fan_control_disabled = True
-                    elif ACTIVE_MODE == "OFF":
-                        temp_control_disabled = True
-                        fan_control_disabled = True
+        # Note: target_temp and mode are no longer available in the pi table
+        # Using default values or current values
         
         return True
     except Exception as e:
@@ -951,6 +896,38 @@ def update_fan_display(slider_value, n_intervals):
         if len(fan_history['time']) > MAX_DATA_POINTS:
             fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
             fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
+        # Store this fan speed for local use (since we can't save it in the database)
+        print(f"Fan speed updated to: {fan_speed}%")
+    
+    # If this is an interval update, calculate the fan speed based on mode
+    elif trigger_id == 'interval-component':
+        # Only auto-update fan speed if not in manual mode and we have temperature data
+        if ACTIVE_MODE != "Ručni" and temp_data['temperature']:
+            # Calculate appropriate fan speed based on conditions
+            calculated_speed = calculate_dynamic_fan_speed(
+                temp_data['temperature'][-1],
+                target_temperature,
+                window_open,
+                ACTIVE_MODE,
+                fan_speed
+            )
+            
+            # Only update if the calculated speed is different
+            if calculated_speed != fan_speed:
+                fan_speed = calculated_speed
+                
+                # Update fan history for significant changes (more than 5%)
+                current_time = datetime.now().strftime('%H:%M:%S')
+                fan_history['time'].append(current_time)
+                fan_history['speed'].append(fan_speed)
+                
+                # Keep only recent history
+                if len(fan_history['time']) > MAX_DATA_POINTS:
+                    fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+                    fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+                
+                print(f"Fan speed auto-updated to: {fan_speed}%")
     
     # Create the gauge figure for fan speed
     fig = go.Figure(go.Indicator(
@@ -1027,8 +1004,8 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
     # Try to query from InfluxDB if available and not using random data
     if client is not None and not use_random:
         try:
-            # Query historical temperature data for the last hour
-            query = 'SELECT sensors_temp FROM environment WHERE time > now() - 1h'
+            # Query historical temperature data for the last hour - changed table to pi
+            query = 'SELECT sensors_temp FROM pi WHERE time > now() - 1h'
             result = client.query(query)
             
             if result:
@@ -1047,22 +1024,11 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
             else:
                 use_random = True  # No results, fall back to random
             
-            # Query historical fan speed data (ac_intensity in database)
-            fan_query = 'SELECT ac_intensity FROM environment WHERE time > now() - 1h'
-            fan_result = client.query(fan_query)
-            
-            if fan_result:
-                fan_points = list(fan_result.get_points())
-                if fan_points:
-                    fan_times = [point['time'] for point in fan_points]
-                    fan_speeds = [point['ac_intensity'] for point in fan_points if point['ac_intensity'] is not None]
-                    
-                    if fan_times and fan_speeds:
-                        fan_history['time'] = [t.split('T')[1].split('.')[0] for t in fan_times[-MAX_DATA_POINTS:]]
-                        fan_history['speed'] = fan_speeds[-MAX_DATA_POINTS:]
+            # Note: Fan speed data (ac_intensity) is no longer in the pi table
+            # Using current values or defaults
         
-            # Query historical window state data
-            window_query = 'SELECT window_open FROM environment WHERE time > now() - 1h'
+            # Query historical window state data - changed table to pi
+            window_query = 'SELECT window_open FROM pi WHERE time > now() - 1h'
             window_result = client.query(window_query)
             
             if window_result:
@@ -1076,8 +1042,8 @@ def update_temperature_graph(n, range_value, x_range_data, device_state):
                         window_history['time'] = [t.split('T')[1].split('.')[0] for t in window_times[-MAX_DATA_POINTS:]]
                         window_history['state'] = [1 if state else 0 for state in window_states[-MAX_DATA_POINTS:]]
             
-            # Query historical movement sensor data (presence field)
-            movement_query = 'SELECT presence FROM environment WHERE time > now() - 1h'
+            # Query historical movement sensor data (presence field) - changed table to pi
+            movement_query = 'SELECT presence FROM pi WHERE time > now() - 1h'
             movement_result = client.query(movement_query)
             
             if movement_result:
@@ -1413,7 +1379,7 @@ def toggle_device(n_clicks, current_state):
     
     return {'on': new_state}, button_text, button_style, indicator_style, content_style
 
-# New function to log all parameters to InfluxDB
+# New function to log all parameters to InfluxDB - updated to work with pi table
 def log_parameters_to_influxdb():
     """Log all current parameters to InfluxDB"""
     if client and not USE_RANDOM_DATA:
@@ -1429,47 +1395,26 @@ def log_parameters_to_influxdb():
                 fan_speed
             )
             
-            # Prepare all parameters to log
+            # Log the calculated fan speed locally even if we can't store it in DB
+            if current_fan_speed != fan_speed:
+                print(f"Fan speed calculated: {current_fan_speed}% (not stored in DB)")
+            
+            # Prepare data to log - using pi table structure (pi table doesn't have fan speed)
             points = [
                 {
-                    'measurement': 'temperature',
-                    'time': current_time,
-                    'fields': {
-                        'value': temp_data['temperature'][-1] if temp_data['temperature'] else None,
-                        'target': float(target_temperature)
-                    }
-                },
-                {
-                    'measurement': 'heater',
-                    'time': current_time,
-                    'fields': {
-                        'state': int(heater_state)
-                    }
-                },
-                {
-                    'measurement': 'fan',
-                    'time': current_time,
-                    'fields': {
-                        'speed': int(fan_speed)  # This is just for our internal metrics
-                    }
-                },
-                {
-                    'measurement': 'environment',  # Use the environment measurement
+                    'measurement': 'pi',
                     'time': current_time,
                     'fields': {
                         'sensors_temp': temp_data['temperature'][-1] if temp_data['temperature'] else None,
-                        'ac_intensity': float(current_fan_speed),  # Use calculated fan speed
                         'presence': int(movement_detected),
-                        'window_open': int(window_open),
-                        'target_temp': float(target_temperature),
-                        'on': int(DEVICE_ON)
+                        'window_open': int(window_open)
                     }
                 }
             ]
             
-            # Write all points to InfluxDB
+            # Write points to InfluxDB
             client.write_points(points)
-            print(f"Successfully logged all parameters to InfluxDB at {current_time}")
+            print(f"Successfully logged parameters to pi table at {current_time}")
         except Exception as e:
             print(f"Error logging parameters to InfluxDB: {e}")
 
@@ -1518,7 +1463,7 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
     prevent_initial_call=True
 )
 def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_clicks, off_clicks):
-    global ACTIVE_MODE, temp_control_disabled, fan_control_disabled, target_temperature
+    global ACTIVE_MODE, temp_control_disabled, fan_control_disabled, target_temperature, fan_speed
     
     # Default control panel style
     control_panel_style = {
@@ -1527,7 +1472,8 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_cli
         'padding': '20px', 
         'backgroundColor': '#f0f0f0', 
         'borderRadius': '10px', 
-        'textAlign': 'center'
+        'textAlign': 'center',
+        'display': 'block'  # Make sure the control panel is visible by default
     }
     
     # Determine which button was clicked
@@ -1537,6 +1483,7 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_cli
         return ACTIVE_MODE, temp_control_disabled, temp_control_disabled, fan_control_disabled, control_panel_style
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    old_mode = ACTIVE_MODE
     
     # Set modes and disabled states based on button clicked
     if button_id == "pid-mode-button":
@@ -1562,12 +1509,39 @@ def update_temperature_mode(pid_clicks, Ručni_clicks, automatic_clicks, low_cli
         temp_control_disabled = True
         fan_control_disabled = True
         
+        # For Low mode, set fan speed immediately
+        if old_mode != "Low":
+            fan_speed = 10  # Low constant speed (10%)
+            
+            # Update fan history
+            current_time = datetime.now().strftime('%H:%M:%S')
+            fan_history['time'].append(current_time)
+            fan_history['speed'].append(fan_speed)
+            
+            # Keep only recent history
+            if len(fan_history['time']) > MAX_DATA_POINTS:
+                fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+                fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
+        
     elif button_id == "off-mode-button":
         ACTIVE_MODE = "OFF"
         temp_control_disabled = True
         fan_control_disabled = True
         # Hide control panel in OFF mode
         control_panel_style['display'] = 'none'
+        
+        # For OFF mode, set fan speed to 0 immediately
+        fan_speed = 0
+        
+        # Update fan history
+        current_time = datetime.now().strftime('%H:%M:%S')
+        fan_history['time'].append(current_time)
+        fan_history['speed'].append(fan_speed)
+        
+        # Keep only recent history
+        if len(fan_history['time']) > MAX_DATA_POINTS:
+            fan_history['time'] = fan_history['time'][-MAX_DATA_POINTS:]
+            fan_history['speed'] = fan_history['speed'][-MAX_DATA_POINTS:]
     
     # Log the mode change to InfluxDB
     log_parameters_to_influxdb()
