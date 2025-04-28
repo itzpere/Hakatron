@@ -139,7 +139,7 @@ def count_alerts():
 # Initialize the Dash app
 app = dash.Dash(__name__, 
                 use_pages=True, 
-                external_stylesheets=[dbc.themes.DARKLY],  # Dark industrial theme
+                external_stylesheets=[dbc.themes.BOOTSTRAP],  # Dark industrial theme
                 suppress_callback_exceptions=True)
 
 # Define the common layout (navbar will appear on all pages)
@@ -175,29 +175,31 @@ app.layout = html.Div([
         html.Div([
             # Alerts with dropdown
             html.Div([
-                # Alerts button with badge
+                # Alerts button with notification dot
                 html.Div([
                     html.Span("Alerts", style={
                         'color': 'white',
-                        'marginRight': '5px'
+                        'marginRight': '5px' # Space between text and potential dot
                     }),
+                    # Simple red notification dot (always visible)
                     html.Span(
-                        id="alert-count-badge",
-                        children=str(alert_count),
+                        id="alert-notification-dot",
                         style={
-                            'backgroundColor': '#e74c3c',
-                            'color': 'white',
+                            'position': 'absolute',
+                            'top': '2px',  # Adjust position relative to "Alerts" text
+                            'right': '-8px', # Adjust position relative to "Alerts" text
+                            'width': '10px',
+                            'height': '10px',
+                            'backgroundColor': '#e74c3c', # Red color
                             'borderRadius': '50%',
-                            'padding': '3px 8px',
-                            'fontSize': '12px',
-                            'fontWeight': 'bold',
-                            'display': 'inline-block' if alert_count > 0 else 'none'
+                            'display': 'block' # Changed from 'none' to 'block'
                         }
                     )
                 ], id="alerts-button", style={
                     'display': 'flex',
                     'alignItems': 'center',
-                    'cursor': 'pointer'
+                    'cursor': 'pointer',
+                    'position': 'relative' # Needed for absolute positioning of the dot
                 }),
                 
                 # Dropdown for alerts (hidden by default)
@@ -429,6 +431,42 @@ def update_alert_badge(n):
         return dash.no_update
         # OR use PreventUpdate to prevent update entirely
         # raise PreventUpdate
+
+# Update the alert notification dot visibility (Now just ensures it stays visible)
+@app.callback(
+    Output('alert-notification-dot', 'style'),
+    Input('app-interval-component', 'n_intervals'),
+    State('alert-notification-dot', 'style') # Get the current style to preserve base properties
+)
+def update_alert_dot_visibility(n, current_style):
+    # Ensure current_style is a dictionary (it should be from the layout)
+    if current_style is None:
+         # Define default style if None (should match layout)
+         current_style = { 
+            'position': 'absolute',
+            'top': '2px', 
+            'right': '-8px', 
+            'width': '10px',
+            'height': '10px',
+            'backgroundColor': '#e74c3c', 
+            'borderRadius': '50%',
+            'display': 'block' # Default to block
+        }
+
+    updated_style = current_style.copy() # Work with a copy
+
+    # Always ensure the dot is visible
+    updated_style['display'] = 'block' 
+            
+    # Check if the style actually changed before returning
+    if updated_style != current_style:
+        return updated_style
+    else:
+        # Prevent unnecessary updates if the style is already correct
+        raise PreventUpdate
+        
+    # Removed the try/except and count_alerts() as it's no longer needed for visibility logic
+    # If you still need error handling for some reason, add it back.
 
 # Keep the existing callback for toggling the alerts dropdown
 @app.callback(

@@ -19,7 +19,7 @@ DEVICE_ON = True  # Default to on
 # Temperature mode settings
 PID_TEMP = 22
 AUTOMATIC_TEMP = 22
-ACTIVE_MODE = "OFF"  # Default mode changed from "Ručni" to "Automatic"
+ACTIVE_MODE = "OFF"  # Default mode changed from "manual" to "Automatic"
 
 # Control state variables (enabled/disabled)
 temp_control_disabled = True  # Set to True for Automatic mode
@@ -367,7 +367,7 @@ def get_mode_button_style(button_mode, active_mode):
     # Base colors for different mode buttons
     button_colors = {
         "PID": '#4CAF50',        # Green
-        "Ručni": '#FF9800',      # Orange
+        "manual": '#FF9800',      # Orange
         "Automatic": '#2196F3',  # Blue
         "Low": '#81D4FA',        # Light Blue
         "OFF": '#f44336'         # Red
@@ -469,8 +469,8 @@ layout = html.Div([
                             html.Button("PID", id="pid-mode-button", 
                                         style=get_mode_button_style("PID", ACTIVE_MODE)),
                             
-                            html.Button("Ručni", id="Ručni-mode-button", 
-                                        style=get_mode_button_style("Ručni", ACTIVE_MODE)),
+                            html.Button("manual", id="manual-mode-button", 
+                                        style=get_mode_button_style("manual", ACTIVE_MODE)),
                             
                             html.Button("Automatic", id="automatic-mode-button", 
                                         style=get_mode_button_style("Automatic", ACTIVE_MODE)),
@@ -918,7 +918,7 @@ def update_current_temp(n, current_mode_data):
         # No movement, no window open - consider energy saving with Low mode
         # CHANGED: Set Low mode when both sensors are off, regardless of current mode
         # (except for manual modes that should not be overridden)
-        if ACTIVE_MODE != "PID" and ACTIVE_MODE != "Ručni":
+        if ACTIVE_MODE != "PID" and ACTIVE_MODE != "manual":
             new_mode = "Low"
             if ACTIVE_MODE != "Low":
                 print("SENSOR CHANGE: Both sensors off - switching to Low energy mode")
@@ -928,7 +928,7 @@ def update_current_temp(n, current_mode_data):
             
     # Special case: Don't override MANUAL or PID modes with automatic changes
     # unless it's a safety issue (window open)
-    if not is_window_open and (ACTIVE_MODE == "PID" or ACTIVE_MODE == "Ručni"):
+    if not is_window_open and (ACTIVE_MODE == "PID" or ACTIVE_MODE == "manual"):
         new_mode = ACTIVE_MODE
     
     # Update the mode if changed
@@ -945,7 +945,7 @@ def update_current_temp(n, current_mode_data):
         elif ACTIVE_MODE == "Automatic":
             temp_control_disabled = True
             fan_control_disabled = True
-        elif ACTIVE_MODE == "Ručni":
+        elif ACTIVE_MODE == "manual":
             temp_control_disabled = True
             fan_control_disabled = False
         elif ACTIVE_MODE == "Low":
@@ -1161,14 +1161,14 @@ def update_fan_display(preset_30_clicks, preset_65_clicks, preset_100_clicks, n_
     # If this is an interval update, calculate the fan speed based on mode
     elif trigger_id == 'interval-component':
         # Only auto-update fan speed if not in manual mode and we have temperature data
-        if ACTIVE_MODE != "Ručni" and temp_data['temperature']:
+        if ACTIVE_MODE != "manual" and temp_data['temperature']:
             # Calculate appropriate fan speed based on conditions
             calculated_speed = calculate_dynamic_fan_speed(
                 temp_data['temperature'][-1],
                 target_temperature,
                 window_open,
                 ACTIVE_MODE,
-                fan_speed # Pass current fan speed for Ručni mode
+                fan_speed # Pass current fan speed for manual mode
             )
             
             # Only update if the calculated speed is different
@@ -1719,7 +1719,7 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
     elif current_mode == "Low":
         # CHANGED: Low mode always sets fan speed to 10% regardless of temperature
         return 10  # Low constant speed (10%)
-    elif current_mode == "Ručni":
+    elif current_mode == "manual":
         return current_fan  # Use user-set fan speed
     elif current_mode == "PID":
         # Simple PID-like control (proportional only for simplicity)
@@ -1740,7 +1740,7 @@ def calculate_dynamic_fan_speed(current_temp, target_temp, window_is_open, curre
 @callback(
     Output('active-mode-store', 'data', allow_duplicate=True),
     [Input('pid-mode-button', 'n_clicks'),
-     Input('Ručni-mode-button', 'n_clicks'),
+     Input('manual-mode-button', 'n_clicks'),
      Input('automatic-mode-button', 'n_clicks'),
      Input('low-mode-button', 'n_clicks'),
      Input('off-mode-button', 'n_clicks')],
@@ -1760,8 +1760,8 @@ def update_active_mode(pid_clicks, rucni_clicks, auto_clicks, low_clicks, off_cl
     if button_id == 'pid-mode-button':
         new_mode = "PID"
         target_temperature = PID_TEMP # Set target temp for PID
-    elif button_id == 'Ručni-mode-button':
-        new_mode = "Ručni"
+    elif button_id == 'manual-mode-button':
+        new_mode = "manual"
         # Keep current target temp or set a default if needed
     elif button_id == 'automatic-mode-button':
         new_mode = "Automatic"
@@ -1795,7 +1795,7 @@ def update_active_mode(pid_clicks, rucni_clicks, auto_clicks, low_clicks, off_cl
      Output('fan-preset-100', 'disabled'),
      Output('control-panel', 'style'),
      Output('pid-mode-button', 'style'),
-     Output('Ručni-mode-button', 'style'),
+     Output('manual-mode-button', 'style'),
      Output('automatic-mode-button', 'style'),
      Output('low-mode-button', 'style'),
      Output('off-mode-button', 'style'),
@@ -1854,7 +1854,7 @@ def update_ui_from_mode(mode_data, current_input_target_temp):
         fan_section_style['display'] = 'none'
         pid_section_style['display'] = 'none'
         
-    elif current_mode == "Ručni":
+    elif current_mode == "manual":
         # Keep the last set target temperature, but disable controls
         target_temperature = current_input_target_temp if current_input_target_temp is not None else target_temperature
         temp_control_disabled = True
@@ -1894,7 +1894,7 @@ def update_ui_from_mode(mode_data, current_input_target_temp):
     # Generate updated button styles based on the *actual* current mode
     button_styles = {
         "PID": get_mode_button_style("PID", current_mode),
-        "Ručni": get_mode_button_style("Ručni", current_mode),
+        "manual": get_mode_button_style("manual", current_mode),
         "Automatic": get_mode_button_style("Automatic", current_mode),
         "Low": get_mode_button_style("Low", current_mode),
         "OFF": get_mode_button_style("OFF", current_mode)
@@ -1905,7 +1905,7 @@ def update_ui_from_mode(mode_data, current_input_target_temp):
 
     return (current_mode, temp_control_disabled, temp_control_disabled, 
             fan_control_disabled, fan_control_disabled, fan_control_disabled, 
-            control_panel_style, button_styles["PID"], button_styles["Ručni"], 
+            control_panel_style, button_styles["PID"], button_styles["manual"], 
             button_styles["Automatic"], button_styles["Low"], button_styles["OFF"],
             temp_section_style, fan_section_style, pid_section_style,
             target_temp_display) # Return the updated target temp display
